@@ -432,8 +432,8 @@ export function insertMessage(m: OutboundMessage, defaultUserId = 'usr_c26f74d6'
   ).run(m.id, m.sessionId, uid, m.mode, m.to, JSON.stringify(m), m.status, m.jitterDelayMs, m.batchId ?? null, m.timestamp, priority);
 }
 
-export function updateMessageStatus(id: string, status: OutboundMessage['status'], errorDetail?: string): void {
-  const row = db.prepare('SELECT payload FROM messages WHERE id = ?').get(id) as any;
+export function updateMessageStatus(id: string, status: OutboundMessage['status'], errorDetail?: string, jitterDelayMs?: number): void {
+  const row = db.prepare('SELECT payload, jitter_delay_ms FROM messages WHERE id = ?').get(id) as any;
   if (row) {
     try {
       const obj = JSON.parse(row.payload);
@@ -441,11 +441,20 @@ export function updateMessageStatus(id: string, status: OutboundMessage['status'
       if (errorDetail !== undefined) {
         obj.errorDetail = errorDetail;
       }
-      db.prepare('UPDATE messages SET status = ?, payload = ? WHERE id = ?').run(status, JSON.stringify(obj), id);
+      if (jitterDelayMs !== undefined) {
+        obj.jitterDelayMs = jitterDelayMs;
+        db.prepare('UPDATE messages SET status = ?, jitter_delay_ms = ?, payload = ? WHERE id = ?').run(status, jitterDelayMs, JSON.stringify(obj), id);
+      } else {
+        db.prepare('UPDATE messages SET status = ?, payload = ? WHERE id = ?').run(status, JSON.stringify(obj), id);
+      }
       return;
     } catch {}
   }
-  db.prepare('UPDATE messages SET status = ? WHERE id = ?').run(status, id);
+  if (jitterDelayMs !== undefined) {
+    db.prepare('UPDATE messages SET status = ?, jitter_delay_ms = ? WHERE id = ?').run(status, jitterDelayMs, id);
+  } else {
+    db.prepare('UPDATE messages SET status = ? WHERE id = ?').run(status, id);
+  }
 }
 
 
@@ -519,6 +528,7 @@ export function listMessages(sessionId?: string, filterUserId?: string, limit = 
       p.to = r.recipient || p.to;
       p.mode = r.mode || p.mode;
       p.status = r.status || p.status;
+      p.jitterDelayMs = typeof r.jitter_delay_ms === 'number' ? r.jitter_delay_ms : (p.jitterDelayMs || 0);
       p.timestamp = r.created_at || p.timestamp;
       return p;
     } catch {
@@ -530,6 +540,7 @@ export function listMessages(sessionId?: string, filterUserId?: string, limit = 
         to: r.recipient,
         text: r.payload,
         status: r.status,
+        jitterDelayMs: typeof r.jitter_delay_ms === 'number' ? r.jitter_delay_ms : 0,
         timestamp: r.created_at,
       };
     }

@@ -527,7 +527,8 @@ export class SessionManager {
         // 6. Rate Limiter & Delay Pacing
         if (isVip) {
           // Jalur Cepat (VIP/OTP): Pacing minimal 1 detik agar natural di socket WA, bypass cooldown blast
-          updateMessageStatus(msg.id, 'pacing');
+          msg.jitterDelayMs = 1000;
+          updateMessageStatus(msg.id, 'pacing', undefined, 1000);
           await new Promise((r) => setTimeout(r, 1000));
         } else {
           // Jalur Blast Normal: Cek delay & batasan
@@ -548,12 +549,15 @@ export class SessionManager {
           const reconnectMult = ab.reconnect.multiplier;
           totalDelay = Math.round((totalDelay + distraction.durationMs) / reconnectMult);
 
+          msg.jitterDelayMs = totalDelay;
           if (totalDelay > 0) {
-            updateMessageStatus(msg.id, 'pacing');
+            updateMessageStatus(msg.id, 'pacing', undefined, totalDelay);
             if (totalDelay > 3000) {
               console.log(`[session:${sessionId}] ⏳ Pacing jeda aman ${Math.round(totalDelay / 1000)}s sebelum mengirim pesan ${msg.id}...`);
             }
             await new Promise((r) => setTimeout(r, totalDelay));
+          } else {
+            updateMessageStatus(msg.id, 'pacing', undefined, 0);
           }
 
           // Human Typing Presence
