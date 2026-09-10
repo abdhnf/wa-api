@@ -83,6 +83,7 @@ export interface UserRecord {
   googleId?: string;
   authProvider?: 'local' | 'google';
   avatarUrl?: string;
+  blastPinHash?: string;
 }
 
 export interface WebhookRecord {

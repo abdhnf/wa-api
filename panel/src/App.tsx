@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Smartphone, Users, MessageSquare, BookOpen, 
   Activity, LogOut, Menu, X, ShieldAlert, Plus, Pencil, Trash2, KeyRound, Loader2, ShieldCheck, Settings, ScrollText,
-  ChevronDown, MoreHorizontal, Shield, Sparkles, ExternalLink
+  ChevronDown, MoreHorizontal, Shield, Sparkles, ExternalLink, Send
 } from 'lucide-react';
 import { Playground } from './components/Playground';
 import { Docs } from './components/Docs';
@@ -13,6 +13,7 @@ import { SessionsPage } from './components/SessionsPage';
 import { SettingsPage } from './components/SettingsPage';
 import { UsersPage } from './components/UsersPage';
 import { ApiKeyModal } from './components/ApiKeyModal';
+import { BlastAccessModal } from './components/BlastAccessModal';
 import { getStoredAuth, clearAuth, apiGetMyProfile, apiGetUsers, apiRotateApiKey, apiCreateUser, apiUpdateUser, apiDeleteUser, apiResetPassword } from './api';
 import { type User, EMPTY_USERS } from './dummyData';
 
@@ -26,6 +27,7 @@ export const App: React.FC = () => {
   const [users, setUsers] = useState<User[]>(EMPTY_USERS);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
+  const [blastModalOpen, setBlastModalOpen] = useState(false);
 
   useEffect(() => {
     apiGetMyProfile().then(p => {
@@ -300,6 +302,16 @@ export const App: React.FC = () => {
               <span className="hidden sm:inline">API Key</span>
             </button>
 
+            {/* Tombol Blast Dashboard Akses */}
+            <button
+              onClick={() => setBlastModalOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-blue-950/60 hover:bg-blue-900/80 border border-blue-800/60 text-blue-300 text-xs font-semibold transition cursor-pointer shadow-xs"
+              title="Akses WhatsApp Blast Dashboard"
+            >
+              <Send className="w-3.5 h-3.5 text-blue-400" />
+              <span className="hidden sm:inline">Blast App</span>
+            </button>
+
             <div 
               onClick={() => setApiKeyModalOpen(true)}
               className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-xl bg-gray-950/70 border border-gray-800/70 hover:border-gray-700 cursor-pointer transition"
@@ -375,6 +387,20 @@ export const App: React.FC = () => {
         }}
         onOpenDocs={() => {
           setActiveTab('docs');
+        }}
+      />
+
+      {/* Modal Akses WhatsApp Blast Dashboard */}
+      <BlastAccessModal
+        isOpen={blastModalOpen}
+        onClose={() => setBlastModalOpen(false)}
+        user={auth.user}
+        onUserUpdated={() => {
+          apiGetMyProfile().then(p => {
+            if (p && !p.error) {
+              setAuth(getStoredAuth());
+            }
+          });
         }}
       />
 

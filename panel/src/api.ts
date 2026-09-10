@@ -391,3 +391,21 @@ export async function apiRotateMyKey() {
   }
   return data;
 }
+
+export async function apiSetBlastPin(pin: string) {
+  const res = await request('/auth/blast-pin', {
+    method: 'POST',
+    body: JSON.stringify({ pin }),
+  });
+  if (res && res.success) {
+    const existing = getStoredUser() || {};
+    localStorage.setItem('wa_user', JSON.stringify({ ...existing, hasBlastPin: true }));
+  }
+  return res;
+}
+
+export async function apiGetBlastLaunchUrl() {
+  return await request('/auth/blast-launch', {
+    method: 'POST',
+  });
+}

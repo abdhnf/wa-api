@@ -10,6 +10,7 @@ import { hashPassword, verifyPassword, generateApiKey, rateLimitHook, checkLogin
 import {
   getUserByEmail, getUserById, listUsers, createUser, incrementUsage,
   upsertWebhook, listWebhooks, listMessages, updateUser, deleteUser, setUserPassword, setUserApiKey,
+  setUserBlastPin, createBlastLaunchToken, verifyAndBurnBlastLaunchToken,
   getMessageById, db,
   getSetting, getAllSettings, setSettings, getAllUserSettings, setUserSettings, upsertGoogleUser, checkAndIncrementWeeklyQuota, getUserLogs, insertApiLog, listApiLogs, deleteApiLogs, clearApiLogs,
 } from './db.js';
@@ -207,7 +208,8 @@ app.get('/api/v1/auth/me', { preHandler: requireAuth }, async (req, reply) => {
     usedToday: user.usedToday,
     quotaPerWeek: user.quotaPerWeek,
     usedThisWeek: user.usedThisWeek,
-    status: user.status
+    status: user.status,
+    hasBlastPin: !!user.blastPinHash,
   };
 });
 
@@ -218,6 +220,98 @@ app.post('/api/v1/auth/rotate-key', { preHandler: requireAuth }, async (req, rep
   const newKey = generateApiKey('wa');
   setUserApiKey(user.id, newKey);
   return { success: true, apiKey: newKey };
+});
+
+// ============ Blast Dashboard Launch & PIN Handshake ============
+
+// Set / Ubah 6-digit PIN Keamanan Blast Dashboard
+app.post('/api/v1/auth/blast-pin', { preHandler: requireAuth }, async (req, reply) => {
+  const user = req.apiKeyUser || getUserById((req.user as any)?.id);
+  if (!user) return reply.code(404).send({ error: 'User tidak ditemukan' });
+
+  const body = req.body as any;
+  const pin = typeof body?.pin === 'string' ? body.pin.trim() : '';
+  if (!/^\d{6}$/.test(pin)) {
+    return reply.code(400).send({ error: 'PIN wajib berupa 6 digit angka numerik.' });
+  }
+
+  const pinHash = hashPassword(pin);
+  setUserBlastPin(user.id, pinHash);
+  return { success: true, message: 'PIN keamanan Blast Dashboard berhasil disimpan!' };
+});
+
+// Generate One-Time Launch URL / Token untuk membuka WhatsApp Blast Dashboard
+app.post('/api/v1/auth/blast-launch', { preHandler: requireAuth }, async (req, reply) => {
+  const user = req.apiKeyUser || getUserById((req.user as any)?.id);
+  if (!user) return reply.code(404).send({ error: 'User tidak ditemukan' });
+
+  // Cek apakah user sudah memasang PIN
+  const hasPin = !!user.blastPinHash;
+  if (!hasPin) {
+    return reply.code(400).send({
+      error: 'Anda belum mengatur PIN keamanan Blast Dashboard. Silakan atur PIN terlebih dahulu.',
+      requirePinSetup: true,
+    });
+  }
+
+  const token = createBlastLaunchToken(user.id, 600); // 10 menit TTL
+  const blastDashboardBaseUrl = (getSetting('blast_dashboard_url') || 'http://172.30.30.229:8085').replace(/\/$/, '');
+  const launchUrl = `${blastDashboardBaseUrl}/auth/launch?token=${token}`;
+
+  return {
+    success: true,
+    token,
+    launchUrl,
+    expiresInSeconds: 600,
+    hasBlastPin: true,
+  };
+});
+
+// Verifikasi Handshake dari Blast Dashboard (Menerima Token + PIN, Burn Token, dan Mengembalikan API Key & Profil)
+app.post('/api/v1/auth/verify-blast-launch', async (req, reply) => {
+  const body = req.body as any;
+  const token = typeof body?.token === 'string' ? body.token.trim() : '';
+  const pin = typeof body?.pin === 'string' ? body.pin.trim() : '';
+
+  if (!token) {
+    return reply.code(400).send({ error: 'Token peluncuran blast wajib disertakan.' });
+  }
+
+  // 1. Verifikasi dan bakar token peluncuran (burn on verify)
+  const tokenCheck = verifyAndBurnBlastLaunchToken(token);
+  if (!tokenCheck.valid || !tokenCheck.userId) {
+    return reply.code(401).send({ error: tokenCheck.reason || 'Token tidak valid atau telah kedaluwarsa.' });
+  }
+
+  // 2. Ambil user
+  const user = getUserById(tokenCheck.userId);
+  if (!user) {
+    return reply.code(404).send({ error: 'User terdaftar tidak ditemukan.' });
+  }
+
+  // 3. Verifikasi PIN numerik 6 digit
+  if (!user.blastPinHash) {
+    return reply.code(400).send({ error: 'User ini belum memiliki PIN keamanan blast yang terdaftar.' });
+  }
+
+  if (!verifyPassword(pin, user.blastPinHash)) {
+    return reply.code(401).send({ error: 'PIN keamanan yang Anda masukkan salah.' });
+  }
+
+  // 4. Return kredensial & profil lengkap untuk dikonsumsi Blast Dashboard
+  return {
+    success: true,
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      apiKey: user.apiKey,
+      quotaPerWeek: user.quotaPerWeek,
+      quotaLimit: user.quotaLimit,
+      usedInPeriod: user.usedInPeriod,
+    }
+  };
 });
 
 // Konfigurasi Auth Publik (apakah Google / Register aktif)

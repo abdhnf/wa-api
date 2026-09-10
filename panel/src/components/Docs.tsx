@@ -3,7 +3,7 @@ import {
   Sliders, BookOpen, Terminal, Copy, Check, Smartphone, MessageSquare,
   Users as UsersIcon, Webhook, Activity, ShieldCheck, Plus, FileText, Send, Eye, ScrollText,
   Cpu, HardDrive, Download, Settings, Layers, Sparkles, CheckCircle2, AlertTriangle, ExternalLink,
-  Shield, Server, Network, ShieldAlert, KeyRound, Zap, RefreshCw
+  Shield, Server, Network, ShieldAlert, KeyRound, Zap, RefreshCw, Lock as LockIcon
 } from 'lucide-react';
 
 function getUserApiKey(): string {
@@ -632,6 +632,41 @@ server {
         auth: 'Publik',
         curl: `curl -s ${API_BASE}/health | jq .`,
         response: '{"status": "ok", "uptime": 1234.5, "sessions": 1}',
+      },
+    ],
+  },
+  {
+    id: 'blast-auth',
+    label: 'Blast Dashboard SSO & PIN',
+    category: 'api',
+    icon: <LockIcon size={15} />,
+    intro: 'Mekanisme One-Time Magic Launch Token dan verifikasi handshake 6-digit PIN untuk login WhatsApp Blast Dashboard tanpa password konvensional.',
+    endpoints: [
+      {
+        method: 'POST',
+        path: '/auth/blast-pin',
+        desc: 'Atur atau ubah 6-digit PIN keamanan numerik akun untuk otorisasi WhatsApp Blast Dashboard.',
+        auth: 'JWT atau X-API-Key',
+        curl: `curl -s -X POST ${API_BASE}/auth/blast-pin \\\n  -H "X-API-Key: ${getUserApiKey()}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"pin": "123456"}' | jq .`,
+        body: '{\n  "pin": "123456"\n}',
+        response: '{"success": true, "message": "PIN keamanan Blast Dashboard berhasil disimpan!"}',
+      },
+      {
+        method: 'POST',
+        path: '/auth/blast-launch',
+        desc: 'Generate link peluncuran sekali pakai (One-Time Launch Token, TTL 10 menit). Membutuhkan PIN akun sudah tersetting.',
+        auth: 'JWT atau X-API-Key',
+        curl: `curl -s -X POST ${API_BASE}/auth/blast-launch \\\n  -H "X-API-Key: ${getUserApiKey()}" | jq .`,
+        response: '{"success": true, "token": "blst_7fa8b9c...", "launchUrl": "http://172.30.30.229:8085/auth/launch?token=blst_7fa8b9c...", "expiresInSeconds": 600, "hasBlastPin": true}',
+      },
+      {
+        method: 'POST',
+        path: '/auth/verify-blast-launch',
+        desc: 'Verifikasi handshake dari backend Blast Dashboard. Token langsung dibakar (single-use burned) dan mengembalikan kredensial API key jika PIN benar.',
+        auth: 'Publik (Server-to-Server Handshake)',
+        curl: `curl -s -X POST ${API_BASE}/auth/verify-blast-launch \\\n  -H "Content-Type: application/json" \\\n  -d '{"token": "blst_7fa8b9c...", "pin": "123456"}' | jq .`,
+        body: '{\n  "token": "blst_7fa8b9c...",\n  "pin": "123456"\n}',
+        response: '{"success": true, "user": {"id": "usr_abc", "name": "Budi", "email": "budi@example.com", "role": "user", "apiKey": "wa_live_sec_...", "quotaPerWeek": 700, "usedInPeriod": 12}}',
       },
     ],
   },

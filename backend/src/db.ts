@@ -89,6 +89,14 @@ CREATE TABLE IF NOT EXISTS webhooks (
   secret TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active'
 );
+
+CREATE TABLE IF NOT EXISTS blast_launch_tokens (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
 
 
@@ -126,6 +134,7 @@ ensureColumn('users', 'quota_limit', 'INTEGER NOT NULL DEFAULT 100');
 ensureColumn('users', 'used_in_period', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('users', 'quota_period', "TEXT NOT NULL DEFAULT 'weekly'");
 ensureColumn('messages', 'priority', "TEXT DEFAULT 'normal'");
+ensureColumn('users', 'blast_pin_hash', 'TEXT');
 
 // Sinkronisasi data kuota existing
 try {
@@ -264,6 +273,35 @@ export function setUserApiKey(id: string, apiKey: string): boolean {
   return (res as any).changes > 0;
 }
 
+export function setUserBlastPin(id: string, pinHash: string): boolean {
+  const res = db.prepare('UPDATE users SET blast_pin_hash = ? WHERE id = ?').run(pinHash, id);
+  return (res as any).changes > 0;
+}
+
+export function createBlastLaunchToken(userId: string, ttlSeconds = 600): string {
+  const token = `blst_${crypto.randomUUID().replace(/-/g, '')}`;
+  const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+  db.prepare('INSERT INTO blast_launch_tokens (token, user_id, expires_at, used) VALUES (?, ?, ?, 0)').run(token, userId, expiresAt);
+  return token;
+}
+
+export function verifyAndBurnBlastLaunchToken(token: string): { valid: boolean; userId?: string; reason?: string } {
+  const row = db.prepare('SELECT * FROM blast_launch_tokens WHERE token = ?').get(token) as any;
+  if (!row) {
+    return { valid: false, reason: 'Token peluncuran blast tidak valid atau tidak ditemukan.' };
+  }
+  if (row.used === 1) {
+    return { valid: false, reason: 'Token ini sudah pernah digunakan (single-use burned).' };
+  }
+  if (new Date(row.expires_at).getTime() < Date.now()) {
+    return { valid: false, reason: 'Token peluncuran blast telah kedaluwarsa.' };
+  }
+
+  // Burn token (tandai sudah dipakai)
+  db.prepare('UPDATE blast_launch_tokens SET used = 1 WHERE token = ?').run(token);
+  return { valid: true, userId: row.user_id };
+}
+
 function mapUser(row: any): UserRecord {
   return {
     id: row.id,
@@ -285,6 +323,7 @@ function mapUser(row: any): UserRecord {
     googleId: row.google_id || undefined,
     authProvider: row.auth_provider || 'local',
     avatarUrl: row.avatar_url || undefined,
+    blastPinHash: row.blast_pin_hash || undefined,
   };
 }
 
