@@ -221,6 +221,17 @@ Frontend panel otomatis mendeteksi apakah diakses melalui port pengembangan (`:5
 
 ## 3. Getting Started / Overview
 
+### Kredensial Default Login Pertama (Fresh Install) 🔑
+Ketika backend dijalankan untuk pertama kali pada database yang baru/kosong, sistem otomatis membuatkan akun **Super Admin** default:
+
+| Field | Default Value | Catatan / Override ENV |
+| :--- | :--- | :--- |
+| **Email** | `admin@example.com` | Variabel ENV: `ADMIN_EMAIL` |
+| **Password** | `admin123` | Variabel ENV: `ADMIN_PASSWORD` |
+| **Role** | `admin` | Akses penuh & Kuota Bebas (`Unlimited ∞`) |
+
+> ⚠️ **PENTING:** Demi keamanan, segera login ke panel dan ganti password default ini di menu **Users & API Keys**!
+
 ### Arsitektur Inti Gateway
 - **Baileys v7 Socket Engine:** Terhubung langsung ke protokol WhatsApp Multi-Device menggunakan enkripsi Noise Handshake (ringan tanpa konsumsi RAM headless Chromium/Puppeteer).
 - **Fastify v5 REST Framework:** Latensi endpoint sub-10ms, validasi schema runtime Zod, dan asynchronous processing non-blocking.

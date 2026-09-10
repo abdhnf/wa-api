@@ -314,6 +314,19 @@ server {
     intro: 'Arsitektur komponen, siklus hidup sesi WhatsApp (QR vs Pairing Code), hierarki tingkatan akun (Role), dan panduan tes kirim pesan pertama.',
     guideBlocks: [
       {
+        title: 'Kredensial Default Login Awal (Fresh Install)',
+        desc: 'Saat backend pertama kali dijalankan pada database yang masih baru/kosong, sistem otomatis membuatkan akun Super Admin perdana:',
+        items: [
+          { label: 'Default Email', value: 'admin@example.com', desc: 'Dapat disesuaikan lewat ENV: ADMIN_EMAIL' },
+          { label: 'Default Password', value: 'admin123', desc: 'Dapat disesuaikan lewat ENV: ADMIN_PASSWORD' },
+          { label: 'Role & Kuota', value: 'Super Admin (Unlimited ∞)', desc: 'Hak akses penuh ke seluruh pengaturan sistem dan API key' }
+        ],
+        callout: {
+          type: 'warning',
+          text: 'PENTING: Segera login ke panel dan perbarui password akun Admin Anda melalui menu Users & API Keys!'
+        }
+      },
+      {
         title: 'Arsitektur Sistem & Alur Komunikasi',
         desc: 'WhatsApp Gateway Baileys v7 dirancang dengan pemisahan tanggung jawab yang jelas:',
         items: [
