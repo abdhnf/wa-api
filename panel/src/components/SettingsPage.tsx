@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Shield, KeyRound, UserPlus, CheckCircle2, AlertCircle, Loader2, HelpCircle } from 'lucide-react';
+import { Settings, Shield, KeyRound, UserPlus, CheckCircle2, AlertCircle, Loader2, HelpCircle, Copy, Check } from 'lucide-react';
 import { apiGetSettings, apiUpdateSettings } from '../api';
 
 export const SettingsPage: React.FC = () => {
@@ -16,6 +16,13 @@ export const SettingsPage: React.FC = () => {
   const [turnstileSiteKey, setTurnstileSiteKey] = useState('');
   const [turnstileSecretKey, setTurnstileSecretKey] = useState('');
   const [hasTurnstileSecret, setHasTurnstileSecret] = useState(false);
+  const [copiedVal, setCopiedVal] = useState<string | null>(null);
+
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedVal(id);
+    setTimeout(() => setCopiedVal(null), 2000);
+  };
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -167,14 +174,67 @@ export const SettingsPage: React.FC = () => {
                   Batasi login Google hanya untuk domain atau email tertentu. Pisahkan dengan koma atau spasi (contoh: <span className='text-emerald-400 font-mono'>abdhnf.com, mitra.co.id</span>). Kosongkan jika ingin mengizinkan semua akun.
                 </p>
               </div>
-              <div className='bg-gray-950/80 border border-gray-800 rounded-xl p-4 text-xs space-y-2'>
-                <div className='flex items-center gap-2 text-gray-300 font-semibold'>
-                  <HelpCircle size={14} className='text-blue-400' />
-                  Origin Callback Google Cloud Console:
+              <div className='bg-gray-950/90 border border-gray-800/80 rounded-xl p-4 text-xs space-y-3'>
+                <div className='flex items-center gap-2 text-gray-200 font-semibold'>
+                  <HelpCircle size={15} className='text-blue-400 shrink-0' />
+                  <span>Panduan Konfigurasi di Google Cloud Console (OAuth 2.0 Client ID)</span>
                 </div>
-                <div className='font-mono text-[11px] bg-gray-900 border border-gray-800 rounded-lg p-2 flex justify-between'>
-                  <span className='text-gray-400'>Authorized Origin:</span>
-                  <span className='text-emerald-400'>{originUrl}</span>
+                <p className='text-[11px] text-gray-400 leading-relaxed'>
+                  Saat membuat atau mengedit <span className='text-gray-200 font-medium'>OAuth 2.0 Client ID (Web application)</span> di Google Cloud Console, masukkan nilai-nilai berikut:
+                </p>
+
+                {/* 1. Authorized JavaScript origins */}
+                <div className='space-y-1'>
+                  <div className='flex items-center justify-between text-[11px]'>
+                    <span className='text-gray-300 font-medium'>1. Authorized JavaScript origins:</span>
+                    <button
+                      type='button'
+                      onClick={() => copyToClipboard(originUrl, 'origin')}
+                      className='flex items-center gap-1 text-emerald-400 hover:text-emerald-300 cursor-pointer text-[10px] font-medium'
+                    >
+                      {copiedVal === 'origin' ? <Check size={12} /> : <Copy size={12} />}
+                      <span>{copiedVal === 'origin' ? 'Tersalin' : 'Salin'}</span>
+                    </button>
+                  </div>
+                  <div className='font-mono text-[11px] bg-gray-900 border border-gray-800 rounded-lg px-3 py-2 text-emerald-400 select-all break-all'>
+                    {originUrl}
+                  </div>
+                </div>
+
+                {/* 2. Authorized redirect URIs */}
+                <div className='space-y-1.5 pt-1'>
+                  <div className='text-gray-300 font-medium text-[11px]'>
+                    2. Authorized redirect URIs (Masukkan kedua URI ini):
+                  </div>
+
+                  <div className='space-y-1.5'>
+                    <div className='flex items-center justify-between font-mono text-[11px] bg-gray-900 border border-gray-800 rounded-lg px-3 py-2'>
+                      <span className='text-gray-200 select-all break-all'>{originUrl}</span>
+                      <button
+                        type='button'
+                        onClick={() => copyToClipboard(originUrl, 'redirect1')}
+                        className='flex items-center gap-1 text-emerald-400 hover:text-emerald-300 cursor-pointer text-[10px] font-medium shrink-0 ml-2'
+                      >
+                        {copiedVal === 'redirect1' ? <Check size={12} /> : <Copy size={12} />}
+                        <span>{copiedVal === 'redirect1' ? 'Tersalin' : 'Salin'}</span>
+                      </button>
+                    </div>
+
+                    <div className='flex items-center justify-between font-mono text-[11px] bg-gray-900 border border-gray-800 rounded-lg px-3 py-2'>
+                      <span className='text-gray-200 select-all break-all'>{`${originUrl}/api/v1/auth/google/callback`}</span>
+                      <button
+                        type='button'
+                        onClick={() => copyToClipboard(`${originUrl}/api/v1/auth/google/callback`, 'redirect2')}
+                        className='flex items-center gap-1 text-emerald-400 hover:text-emerald-300 cursor-pointer text-[10px] font-medium shrink-0 ml-2'
+                      >
+                        {copiedVal === 'redirect2' ? <Check size={12} /> : <Copy size={12} />}
+                        <span>{copiedVal === 'redirect2' ? 'Tersalin' : 'Salin'}</span>
+                      </button>
+                    </div>
+                  </div>
+                  <p className='text-[10px] text-gray-500'>
+                    Tip: Google Identity Services (GIS popup) membutuhkan origin URL di atas. URI callback backend disediakan sebagai pelengkap standar OAuth2.
+                  </p>
                 </div>
               </div>
             </div>
