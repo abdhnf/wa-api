@@ -28,6 +28,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
   });
   const [turnstileToken, setTurnstileToken] = useState('');
   const turnstileWidgetRef = useRef<HTMLDivElement | null>(null);
+  const googleBtnContainerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -38,12 +39,82 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
       .catch(() => {});
   }, []);
 
+  // ============ Google Identity Services (GSI) ============
+  useEffect(() => {
+    if (!authConfig.googleAuthEnabled || !authConfig.googleClientId) return;
 
-  // Load & render Cloudflare Turnstile widget
+    const scriptId = 'google-gsi-client-script';
+    let script = document.getElementById(scriptId) as HTMLScriptElement | null;
+    if (!script) {
+      script = document.createElement('script');
+      script.id = scriptId;
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+
+    const setupGoogleGsi = () => {
+      const google = (window as any).google;
+      if (!google?.accounts?.id) return;
+
+      try {
+        google.accounts.id.initialize({
+          client_id: authConfig.googleClientId,
+          callback: async (response: any) => {
+            if (!response?.credential) return;
+            try {
+              setLoading(true);
+              setError('');
+              const res = await apiLoginGoogle({ credential: response.credential });
+              if (res?.user) {
+                onLoginSuccess(res.user);
+              }
+            } catch (err: any) {
+              setError(err.message || 'Gagal login dengan Google');
+            } finally {
+              setLoading(false);
+            }
+          },
+          auto_select: false,
+          cancel_on_tap_outside: true,
+        });
+
+        // Render tombol Google Sign-In resmi ke container
+        if (googleBtnContainerRef.current) {
+          googleBtnContainerRef.current.innerHTML = '';
+          google.accounts.id.renderButton(googleBtnContainerRef.current, {
+            theme: 'filled_black',
+            size: 'large',
+            type: 'standard',
+            text: 'continue_with',
+            shape: 'rectangular',
+            logo_alignment: 'left',
+            width: googleBtnContainerRef.current.clientWidth || 340,
+          });
+        }
+
+        // Tampilkan One Tap popup jika memungkinkan
+        google.accounts.id.prompt();
+      } catch (err: any) {
+        console.error('[GSI Setup Error]', err);
+      }
+    };
+
+    const interval = setInterval(() => {
+      if ((window as any).google?.accounts?.id) {
+        clearInterval(interval);
+        setupGoogleGsi();
+      }
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [authConfig.googleAuthEnabled, authConfig.googleClientId]);
+
+  // ============ Cloudflare Turnstile ============
   useEffect(() => {
     if (!authConfig.turnstileEnabled || !authConfig.turnstileSiteKey) return;
 
-    // Load Turnstile script jika belum ada
     const scriptId = 'cf-turnstile-script';
     let script = document.getElementById(scriptId) as HTMLScriptElement | null;
     if (!script) {
@@ -117,21 +188,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  const handleGoogleLogin = async () => {
-    setError('');
-    setLoading(true);
-    try {
-      if (!authConfig.googleClientId) {
-        throw new Error('Google Client ID belum dikonfigurasi di menu Settings Admin.');
-      }
-      // Demo placeholder / trigger google OAuth
-      throw new Error('Silakan pasang Google Client ID yang valid di panel Settings.');
-    } catch (err: any) {
-      setLoading(false);
-      setError(err.message);
-    }
-  };
-
   return (
     <div className='min-h-screen bg-gray-950 flex flex-col justify-center items-center px-4 sm:px-6 lg:px-8 py-12 relative overflow-hidden'>
       <div className='absolute w-[450px] h-[450px] bg-emerald-600/10 rounded-full blur-3xl -top-24 -left-24 pointer-events-none' />
@@ -158,22 +214,18 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
             </div>
           )}
 
+          {/* Google Sign-In Container */}
           {authConfig.googleAuthEnabled && (
-            <>
-              <button
-                type='button'
-                onClick={handleGoogleLogin}
-                disabled={loading}
-                className='w-full flex items-center justify-center gap-3 px-4 py-2.5 bg-gray-950 hover:bg-gray-800/80 border border-gray-800 rounded-xl text-xs font-semibold text-gray-200 transition shadow-xs disabled:opacity-50 cursor-pointer'
+            <div className='space-y-3'>
+              <div
+                ref={googleBtnContainerRef}
+                className='w-full flex items-center justify-center min-h-[44px] overflow-hidden rounded-xl'
               >
-                <svg className='w-4 h-4' viewBox='0 0 24 24'>
-                  <path fill='#4285F4' d='M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z' />
-                  <path fill='#34A853' d='M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.35 24 12 24z' />
-                  <path fill='#FBBC05' d='M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 10.02 0 12s.45 3.82 1.25 5.42l4.03-3.15z' />
-                  <path fill='#EA4335' d='M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z' />
-                </svg>
-                Lanjutkan dengan Google
-              </button>
+                <div className='flex items-center gap-2 text-xs text-gray-500 py-2'>
+                  <Loader2 className='w-3.5 h-3.5 animate-spin' />
+                  <span>Memuat Google Login...</span>
+                </div>
+              </div>
 
               <div className='relative flex py-1 items-center'>
                 <div className='grow border-t border-gray-800'></div>
@@ -182,7 +234,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
                 </span>
                 <div className='grow border-t border-gray-800'></div>
               </div>
-            </>
+            </div>
           )}
 
           <form onSubmit={handleSubmit} className='space-y-4'>
