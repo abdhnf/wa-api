@@ -287,11 +287,7 @@ app.post('/api/v1/auth/google', async (req, reply) => {
     }
   }
 
-  // Cek apakah pendaftaran publik dinonaktifkan untuk pengguna baru
-  const existingUser = getUserByEmail(googleEmail);
-  if (!existingUser && getSetting('registration_enabled') === 'false') {
-    return reply.code(403).send({ error: 'Pendaftaran akun baru saat ini ditutup oleh Administrator.' });
-  }
+  // Catatan: Google Auth selalu mengizinkan user baru terlepas dari toggle form registrasi publik manual
 
   const user = upsertGoogleUser({
     googleId,
