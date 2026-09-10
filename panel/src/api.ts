@@ -2,8 +2,10 @@
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || (
   typeof window !== 'undefined'
-    ? `${window.location.protocol}//${window.location.hostname}:3100/api/v1`
-    : 'http://172.30.30.229:3100/api/v1'
+    ? (window.location.port === '5174'
+        ? `${window.location.protocol}//${window.location.hostname}:3100/api/v1`
+        : `${window.location.origin}/api/v1`)
+    : 'http://127.0.0.1:3100/api/v1'
 );
 
 export function getStoredToken(): string | null {

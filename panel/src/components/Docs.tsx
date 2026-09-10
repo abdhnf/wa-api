@@ -36,6 +36,7 @@ interface GuideBlock {
   lang?: string;
   items?: { label: string; value: string; desc?: string }[];
   callout?: { type: 'tip' | 'warning' | 'info'; text: string };
+  notes?: string[];
 }
 
 interface Section {
@@ -117,67 +118,98 @@ sqlite3 --version`,
     label: '01. Installation',
     category: 'system',
     icon: <Download size={15} />,
-    intro: 'Langkah instalasi lengkap dari repository GitHub https://github.com/abdhnf/wa-api, kompilasi TypeScript, hingga deployment service systemd di Linux server.',
+    intro: 'Pilih metode instalasi yang paling sesuai dengan lingkungan server Anda: Docker Compose (paling mudah & terisolasi), aaPanel Web GUI (tanpa banyak sentuh terminal), atau Standalone Linux VPS (PM2 / Systemd).',
     guideBlocks: [
       {
-        title: '1. Clone Repository GitHub',
-        desc: 'Unduh source code monorepo WhatsApp API Gateway ke direktori server Anda:',
-        code: `# Clone repository ke direktori project (misal: ~/dev/wa-api)
+        title: 'Metode A: Docker Compose (Rekomendasi untuk Pemula / 1-Klik)',
+        desc: 'Solusi paling praktis tanpa perlu menginstal Node.js, pnpm, atau compiler di host OS. Container backend Fastify dan Nginx frontend panel otomatis terhubung.',
+        code: `# 1. Clone repository
 git clone https://github.com/abdhnf/wa-api.git
 cd wa-api
 
-# Periksa struktur direktori
-ls -la`,
-        lang: 'bash'
-      },
-      {
-        title: '2. Setup & Build Backend Gateway',
-        desc: 'Instal dependensi Fastify, engine Baileys, dan kompilasi modul TypeScript backend:',
-        code: `# Masuk ke folder backend
-cd backend   # atau ~/dev/wa-server-backend
+# 2. Siapkan file environment backend
+cp backend/.env.example backend/.env
 
-# Instal seluruh dependensi
-pnpm install
+# 3. Jalankan seluruh container di background
+docker compose up -d --build
 
-# Salin konfigurasi environment default
-cp .env.example .env
-
-# Kompilasi TypeScript ke bundle produksi
-pnpm build`,
+# 4. Periksa log dan status container
+docker compose ps
+docker compose logs -f`,
         lang: 'bash',
-        callout: {
-          type: 'info',
-          text: 'Database SQLite (wa.db) akan otomatis dibuat dan dimigrasikan secara mandiri saat backend pertama kali dijalankan (auto-schema migration).'
-        }
+        notes: [
+          'Panel admin langsung dapat diakses di: http://SERVER_IP:5174',
+          'Database SQLite dan token sesi Baileys otomatis tersimpan aman di folder ./data lokal.',
+          'Container panel sudah memiliki reverse proxy Nginx internal yang otomatis meneruskan request /api/ ke container backend.'
+        ]
       },
       {
-        title: '3. Setup & Build Frontend Admin Panel',
-        desc: 'Instal dependensi React, Vite, Tailwind CSS, dan kompilasi bundle UI panel:',
-        code: `# Masuk ke folder panel
-cd ../panel   # atau ~/dev/wa-panel
+        title: 'Metode B: aaPanel Web Manager (GUI Control Panel)',
+        desc: 'Panduan deployment untuk pengguna aaPanel tanpa perlu konfigurasi systemd manual lewat terminal:',
+        code: `# 1. Install Node.js Runtime di aaPanel
+Buka menu App Store -> Cari "Node.js Version Manager" -> Install Node.js v20.x atau v22.x LTS.
 
-# Instal dependensi panel
-pnpm install
+# 2. Upload / Clone Source Code
+Buka menu Files -> Masuk ke /www/wwwroot/ -> Buka Terminal di aaPanel:
+git clone https://github.com/abdhnf/wa-api.git
+cd wa-api
 
-# Konfigurasi alamat endpoint API
-echo "VITE_API_BASE=http://172.30.30.229:3100/api/v1" > .env
+# 3. Setup Backend di aaPanel Node Project
+- Buka menu Website -> Tab "Node project" -> Klik "Add Node project"
+- Project directory: /www/wwwroot/wa-api/backend
+- Project name: wa-backend
+- Run opt: Node (pilih Node v20/v22 yang sudah diinstall)
+- Run file: dist/server.js
+- Port: 3100
+- Catatan: Jalankan 'pnpm install && pnpm build' di folder backend terlebih dahulu sebelum submit.
 
-# Kompilasi aset produksi (Vite Production Build)
-pnpm build`,
-        lang: 'bash'
+# 4. Build Frontend Panel
+Buka terminal aaPanel di folder /www/wwwroot/wa-api/panel:
+pnpm install && pnpm build
+
+# 5. Pasang Domain & Reverse Proxy di aaPanel
+- Menu Website -> Add Website (misal: wa-api.domain.com)
+- Buka tab SSL -> Pilih Let's Encrypt -> Klik Apply.
+- Buka tab Config (Nginx configuration) -> Masukkan blok proxy:
+  location /api/ { proxy_pass http://127.0.0.1:3100; }
+  location / { root /www/wwwroot/wa-api/panel/dist; try_files $uri $uri/ /index.html; }`,
+        lang: 'bash',
+        notes: [
+          'Dengan cara ini, frontend disajikan langsung oleh Nginx statis kecepatan tinggi, sedangkan API ditangani oleh Node.js background worker.',
+          'Satu domain wa-api.domain.com langsung menangani panel web dan API tanpa bentrok port.'
+        ]
       },
       {
-        title: '4. Konfigurasi Background Service (Systemd Daemon)',
-        desc: 'Agar gateway berjalan permanen di background dan otomatis restart saat server reboot, buat unit file systemd:',
-        code: `# A. Buat service backend: /etc/systemd/system/wa-backend.service
+        title: 'Metode C: Standalone Linux VPS (PM2 / Systemd)',
+        desc: 'Untuk instalasi langsung di server Linux polosan (Ubuntu 22/24 LTS, Debian 12) menggunakan process manager PM2 atau daemon Systemd:',
+        code: `# 1. Clone & Install Dependensi Monorepo
+git clone https://github.com/abdhnf/wa-api.git
+cd wa-api
+
+# Backend setup
+cd backend && cp .env.example .env
+pnpm install && pnpm build
+
+# Frontend setup
+cd ../panel && cp .env.example .env
+pnpm install && pnpm build
+
+# 2. Pilihan Daemon A: Jalankan dengan PM2 (Paling Mudah)
+npm install -g pm2
+cd ../backend
+pm2 start dist/server.js --name "wa-backend"
+pm2 save && pm2 startup
+
+# 3. Pilihan Daemon B: Jalankan dengan Systemd
+sudo tee /etc/systemd/system/wa-backend.service << 'EOF'
 [Unit]
-Description=WhatsApp API Gateway Backend (Baileys v7)
+Description=WhatsApp Gateway Backend
 After=network.target
 
 [Service]
 Type=simple
-User=abdhnf
-WorkingDirectory=/home/abdhnf/dev/wa-server-backend
+User=root
+WorkingDirectory=/opt/wa-api/backend
 ExecStart=/usr/bin/node dist/server.js
 Restart=always
 RestartSec=5
@@ -185,36 +217,15 @@ Environment=NODE_ENV=production
 
 [Install]
 WantedBy=multi-user.target
+EOF
 
-# B. Buat service frontend: /etc/systemd/system/wa-panel.service
-[Unit]
-Description=WhatsApp API Admin Panel (Vite Preview)
-After=network.target
-
-[Service]
-Type=simple
-User=abdhnf
-WorkingDirectory=/home/abdhnf/dev/wa-panel
-ExecStart=/usr/bin/pnpm preview --host 0.0.0.0 --port 5174
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target`,
-        lang: 'ini'
-      },
-      {
-        title: '5. Mengaktifkan & Menjalankan Service',
-        desc: 'Jalankan service dan pastikan status keduanya dalam kondisi active (running):',
-        code: `# Reload systemd daemon
 sudo systemctl daemon-reload
-
-# Aktifkan auto-start saat booting
-sudo systemctl enable --now wa-backend.service wa-panel.service
-
-# Periksa status layanan
-sudo systemctl status wa-backend.service wa-panel.service`,
-        lang: 'bash'
+sudo systemctl enable --now wa-backend`,
+        lang: 'bash',
+        notes: [
+          'Frontend panel dist/ dapat disajikan menggunakan Nginx biasa atau Caddy server.',
+          'Gunakan perintah pm2 logs wa-backend atau journalctl -u wa-backend -f untuk memantau aktivitas server.'
+        ]
       }
     ]
   },
@@ -789,6 +800,21 @@ export const Docs: React.FC = () => {
                     <pre className="bg-[#0d1117] border border-gray-800 rounded-xl p-4 text-xs font-mono text-gray-200 overflow-x-auto whitespace-pre-wrap leading-relaxed">
                       {block.code}
                     </pre>
+                  </div>
+                )}
+
+                {/* Bullet Notes / Tips */}
+                {block.notes && block.notes.length > 0 && (
+                  <div className="p-3 bg-emerald-950/20 border border-emerald-900/40 rounded-xl space-y-1.5 mt-2">
+                    <div className="text-[11px] font-semibold text-emerald-400 flex items-center gap-1.5">
+                      <Sparkles size={13} />
+                      <span>Catatan & Tips:</span>
+                    </div>
+                    <ul className="space-y-1 pl-4 list-disc text-xs text-gray-300">
+                      {block.notes.map((note, nIdx) => (
+                        <li key={nIdx} className="leading-relaxed">{note}</li>
+                      ))}
+                    </ul>
                   </div>
                 )}
 
