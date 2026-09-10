@@ -796,6 +796,7 @@ app.get('/api/v1/settings', { preHandler: requireAuth }, async (req, reply) => {
       turnstileSiteKey: all['turnstile_site_key'] || '',
       turnstileSecretKey: all['turnstile_secret_key'] ? '••••••••' : '',
       hasTurnstileSecret: Boolean(all['turnstile_secret_key']),
+      blastDashboardUrl: all['blast_dashboard_url'] || 'http://172.30.30.229:8085',
     },
   };
 });
@@ -814,6 +815,7 @@ app.patch('/api/v1/settings', { preHandler: requireAuth }, async (req, reply) =>
     turnstileEnabled?: boolean;
     turnstileSiteKey?: string;
     turnstileSecretKey?: string;
+    blastDashboardUrl?: string;
   };
   const updates: Record<string, string> = {};
   if (body.googleAuthEnabled !== undefined) {
@@ -839,6 +841,9 @@ app.patch('/api/v1/settings', { preHandler: requireAuth }, async (req, reply) =>
   }
   if (body.turnstileSecretKey !== undefined && body.turnstileSecretKey !== '••••••••' && body.turnstileSecretKey.trim() !== '') {
     updates['turnstile_secret_key'] = body.turnstileSecretKey.trim();
+  }
+  if (body.blastDashboardUrl !== undefined) {
+    updates['blast_dashboard_url'] = body.blastDashboardUrl.trim();
   }
   setSettings(updates);
   return { success: true, message: 'Pengaturan berhasil diperbarui.' };

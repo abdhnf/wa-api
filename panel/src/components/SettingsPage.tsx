@@ -16,6 +16,7 @@ export const SettingsPage: React.FC = () => {
   const [turnstileSiteKey, setTurnstileSiteKey] = useState('');
   const [turnstileSecretKey, setTurnstileSecretKey] = useState('');
   const [hasTurnstileSecret, setHasTurnstileSecret] = useState(false);
+  const [blastDashboardUrl, setBlastDashboardUrl] = useState('http://172.30.30.229:8085');
   const [copiedVal, setCopiedVal] = useState<string | null>(null);
 
   const copyToClipboard = (text: string, id: string) => {
@@ -46,6 +47,9 @@ export const SettingsPage: React.FC = () => {
         setTurnstileSiteKey(res.settings.turnstileSiteKey || '');
         setTurnstileSecretKey(res.settings.turnstileSecretKey || '');
         setHasTurnstileSecret(Boolean(res.settings.hasTurnstileSecret));
+        if (res.settings.blastDashboardUrl) {
+          setBlastDashboardUrl(res.settings.blastDashboardUrl);
+        }
       }
     } catch (err: any) {
       showToast(err?.message || 'Gagal memuat pengaturan', 'error');
@@ -58,7 +62,17 @@ export const SettingsPage: React.FC = () => {
     e.preventDefault();
     setSaving(true);
     try {
-      await apiUpdateSettings({ googleAuthEnabled, googleClientId, googleClientSecret, registrationEnabled, turnstileEnabled, turnstileSiteKey, turnstileSecretKey, googleAllowedDomains });
+      await apiUpdateSettings({
+        googleAuthEnabled,
+        googleClientId,
+        googleClientSecret,
+        registrationEnabled,
+        turnstileEnabled,
+        turnstileSiteKey,
+        turnstileSecretKey,
+        googleAllowedDomains,
+        blastDashboardUrl,
+      });
       showToast('Pengaturan sistem berhasil disimpan!', 'success');
       loadSettings();
     } catch (err: any) {
@@ -241,6 +255,36 @@ export const SettingsPage: React.FC = () => {
           )}
         </div>
       
+        {/* WhatsApp Blast Dashboard Integration Host */}
+        <div className='bg-gray-900/60 border border-gray-800 rounded-2xl p-5 space-y-4'>
+          <div className='flex items-start gap-3'>
+            <div className='p-2.5 rounded-xl bg-blue-950/50 border border-blue-800/40 text-blue-400'>
+              <KeyRound size={20} />
+            </div>
+            <div>
+              <h3 className='text-sm font-semibold text-gray-200'>Integrasi Target Host WhatsApp Blast Dashboard</h3>
+              <p className='text-xs text-gray-400 mt-0.5'>
+                URL basis aplikasi WhatsApp Blast Dashboard yang dituju saat membuat Magic Launch Link.
+              </p>
+            </div>
+          </div>
+
+          <div className='space-y-1.5 pt-2 border-t border-gray-800/60'>
+            <label className='block text-xs font-semibold text-gray-300'>Target Host URL</label>
+            <input
+              type='url'
+              value={blastDashboardUrl}
+              onChange={(e) => setBlastDashboardUrl(e.target.value)}
+              placeholder='http://172.30.30.229:8085'
+              className='w-full px-3.5 py-2.5 bg-gray-950/60 border border-gray-800 rounded-xl text-xs font-mono text-gray-200 focus:outline-none focus:border-blue-500 transition'
+              required
+            />
+            <p className='text-[11px] text-gray-500'>
+              Contoh: <code className='text-gray-400 font-mono'>http://172.30.30.229:8085</code> atau domain kustom Anda.
+            </p>
+          </div>
+        </div>
+
         {/* Cloudflare Turnstile CAPTCHA */}
         <div className='bg-gray-900/60 border border-gray-800 rounded-2xl p-5 space-y-5'>
           <div className='flex items-start justify-between gap-4'>

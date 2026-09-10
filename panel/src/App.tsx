@@ -197,30 +197,27 @@ export const App: React.FC = () => {
 
       {/* Top Navbar Header */}
       <header className="border-b border-gray-800/80 bg-gray-900/90 backdrop-blur-md sticky top-0 z-40 transition-all">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
+        <div className="w-full px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
           
           {/* Sisi Kiri: Brand & Logo */}
-          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center shadow-lg shadow-emerald-950 font-bold text-sm sm:text-base text-white">
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center shadow-lg shadow-emerald-950 font-bold text-sm text-white">
               WA
             </div>
             <div>
-              <div className="flex items-center gap-1.5 sm:gap-2">
+              <div className="flex items-center gap-1.5">
                 <span className="font-bold text-xs sm:text-sm tracking-tight text-gray-100">
                   WA Gateway
                 </span>
-                <span className="text-[9px] sm:text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800/60 px-1.5 sm:px-2 py-0.2 rounded-full font-mono font-medium">
+                <span className="text-[9px] bg-emerald-950 text-emerald-400 border border-emerald-800/60 px-1.5 py-0.2 rounded-full font-mono font-medium">
                   v7
                 </span>
               </div>
-              <p className="text-[10px] text-gray-400 hidden lg:block leading-none mt-0.5">
-                Baileys Socket &bull; SQLite Storage
-              </p>
             </div>
           </div>
 
           {/* Sisi Tengah: Desktop Navigation Bar (Ramping & Proporsional) */}
-          <nav className="hidden lg:flex items-center gap-1 bg-gray-950/80 p-1 rounded-2xl border border-gray-800/80 shadow-xs">
+          <nav className="hidden md:flex items-center gap-1 bg-gray-950/80 p-1 rounded-2xl border border-gray-800/80 shadow-xs">
             {coreNavItems.map(item => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -347,7 +344,7 @@ export const App: React.FC = () => {
             {/* Hamburger Button (Mobile & Tablet) */}
             <button
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-2 text-gray-300 hover:text-white hover:bg-gray-800 rounded-xl border border-gray-800 transition cursor-pointer shadow-xs"
+              className="md:hidden p-2 text-gray-300 hover:text-white hover:bg-gray-800 rounded-xl border border-gray-800 transition cursor-pointer shadow-xs"
               title="Buka Menu"
             >
               <Menu className="w-5 h-5" />
@@ -357,7 +354,8 @@ export const App: React.FC = () => {
       </header>
 
       {/* Main Content Area (Diberi padding-bottom di mobile agar tidak tertutup sticky bottom bar) */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-3.5 sm:p-6 lg:p-8 pb-24 lg:pb-12">
+      {/* Main Container Penuh dengan Padding Rapi */}
+      <main className="flex-1 w-full px-3.5 sm:px-6 lg:px-8 py-4 sm:py-6 pb-24 md:pb-12">
         {activeTab === 'playground' && <Playground />}
         {activeTab === 'monitor' && <RealtimeMonitor />}
         {activeTab === 'sessions' && <SessionsPage />}
@@ -406,7 +404,7 @@ export const App: React.FC = () => {
 
 
       {/* Mobile Sticky Bottom Navigation Bar (Thumb-Friendly) */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-gray-900/95 backdrop-blur-lg border-t border-gray-800/90 px-2 py-1.5 shadow-2xl">
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-gray-900/95 backdrop-blur-lg border-t border-gray-800/90 px-2 py-1.5 shadow-2xl">
         <div className="flex items-center justify-around max-w-md mx-auto">
           {coreNavItems.map(item => {
             const Icon = item.icon;
@@ -446,7 +444,7 @@ export const App: React.FC = () => {
 
       {/* Mobile Slide-over Drawer / Bottom Sheet */}
       {mobileMenuOpen && (
-        <div className="lg:hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center animate-in fade-in duration-150">
+        <div className="md:hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center animate-in fade-in duration-150">
           {/* Backdrop */}
           <div 
             className="fixed inset-0 bg-black/75 backdrop-blur-xs transition-opacity"

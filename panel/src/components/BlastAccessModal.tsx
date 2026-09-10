@@ -126,14 +126,9 @@ export const BlastAccessModal: React.FC<BlastAccessModalProps> = ({
               <Smartphone className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-gray-100">Akses WhatsApp Blast Dashboard</h3>
-                <span className="text-[10px] bg-blue-950 text-blue-300 border border-blue-800/60 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
-                  Direct Magic Link
-                </span>
-              </div>
+              <h3 className="text-base font-bold text-gray-100">Akses WhatsApp Blast Dashboard</h3>
               <p className="text-xs text-gray-400">
-                Masuk ke dashboard broadcast tanpa password konvensional
+                Masuk ke dashboard broadcast via Single-Use Token &amp; PIN
               </p>
             </div>
           </div>
