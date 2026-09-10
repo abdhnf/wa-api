@@ -197,27 +197,25 @@ export const App: React.FC = () => {
 
       {/* Top Navbar Header */}
       <header className="border-b border-gray-800/80 bg-gray-900/90 backdrop-blur-md sticky top-0 z-40 transition-all">
-        <div className="w-full px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
           
           {/* Sisi Kiri: Brand & Logo */}
-          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
             <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center shadow-lg shadow-emerald-950 font-bold text-sm text-white">
               WA
             </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-bold text-xs sm:text-sm tracking-tight text-gray-100">
-                  WA Gateway
-                </span>
-                <span className="text-[9px] bg-emerald-950 text-emerald-400 border border-emerald-800/60 px-1.5 py-0.2 rounded-full font-mono font-medium">
-                  v7
-                </span>
-              </div>
+            <div className="hidden sm:flex items-center gap-1.5">
+              <span className="font-bold text-xs sm:text-sm tracking-tight text-gray-100">
+                WA Gateway
+              </span>
+              <span className="text-[9px] bg-emerald-950 text-emerald-400 border border-emerald-800/60 px-1.5 py-0.2 rounded-full font-mono font-medium">
+                v7
+              </span>
             </div>
           </div>
 
-          {/* Sisi Tengah: Desktop Navigation Bar (Ramping & Proporsional) */}
-          <nav className="hidden md:flex items-center gap-1 bg-gray-950/80 p-1 rounded-2xl border border-gray-800/80 shadow-xs">
+          {/* Sisi Tengah: Desktop Navigation Bar (Padding Compact & Responsive Label) */}
+          <nav className="hidden lg:flex items-center gap-0.5 bg-gray-950/80 p-1 rounded-2xl border border-gray-800/80 shadow-xs shrink-0">
             {coreNavItems.map(item => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -225,14 +223,16 @@ export const App: React.FC = () => {
                 <button
                   key={item.id}
                   onClick={() => handleSwitchTab(item.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                     isActive
                       ? 'bg-emerald-600 text-white shadow-xs'
                       : 'text-gray-400 hover:text-gray-200 hover:bg-gray-900/90'
                   }`}
+                  title={item.label}
                 >
-                  <Icon className="w-3.5 h-3.5" />
-                  <span>{item.label}</span>
+                  <Icon className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden xl:inline">{item.label}</span>
+                  <span className="xl:hidden">{item.shortLabel}</span>
                 </button>
               );
             })}
@@ -242,13 +242,13 @@ export const App: React.FC = () => {
               <div className="relative ml-0.5" ref={adminDropdownRef}>
                 <button
                   onClick={() => setAdminDropdownOpen(!adminDropdownOpen)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                     isAdminTabActive
                       ? 'bg-purple-600 text-white shadow-xs'
                       : 'text-gray-400 hover:text-gray-200 hover:bg-gray-900/90'
                   }`}
                 >
-                  <Shield className="w-3.5 h-3.5 text-purple-300" />
+                  <Shield className="w-3.5 h-3.5 text-purple-300 shrink-0" />
                   <span>Admin</span>
                   <ChevronDown className={`w-3 h-3 transition-transform ${adminDropdownOpen ? 'rotate-180' : ''}`} />
                 </button>
@@ -287,39 +287,38 @@ export const App: React.FC = () => {
           </nav>
 
           {/* Sisi Kanan: User Info & Actions */}
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            {/* User Badge */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {/* Tombol API Key Navbar */}
             <button
               onClick={() => setApiKeyModalOpen(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-800/60 text-emerald-300 text-xs font-semibold transition cursor-pointer shadow-xs"
+              className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-800/60 text-emerald-300 text-xs font-semibold transition cursor-pointer shadow-xs"
               title="Lihat API Key & Kuota Akun"
             >
               <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden sm:inline">API Key</span>
+              <span className="hidden xl:inline">API Key</span>
             </button>
 
             {/* Tombol Blast Dashboard Akses */}
             <button
               onClick={() => setBlastModalOpen(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-blue-950/60 hover:bg-blue-900/80 border border-blue-800/60 text-blue-300 text-xs font-semibold transition cursor-pointer shadow-xs"
+              className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-blue-950/60 hover:bg-blue-900/80 border border-blue-800/60 text-blue-300 text-xs font-semibold transition cursor-pointer shadow-xs"
               title="Akses WhatsApp Blast Dashboard"
             >
               <Send className="w-3.5 h-3.5 text-blue-400" />
-              <span className="hidden sm:inline">Blast App</span>
+              <span className="hidden xl:inline">Blast App</span>
             </button>
 
+            {/* User Profile Capsule */}
             <div 
               onClick={() => setApiKeyModalOpen(true)}
-              className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-xl bg-gray-950/70 border border-gray-800/70 hover:border-gray-700 cursor-pointer transition"
+              className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-gray-950/70 border border-gray-800/70 hover:border-gray-700 cursor-pointer transition"
               title="Klik untuk melihat detail profil & API key"
             >
-              <div className="w-6 h-6 rounded-lg bg-emerald-950 border border-emerald-800/60 text-emerald-400 flex items-center justify-center font-bold text-xs">
+              <div className="w-6 h-6 rounded-lg bg-emerald-950 border border-emerald-800/60 text-emerald-400 flex items-center justify-center font-bold text-xs shrink-0">
                 {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
               </div>
-              <div className="flex flex-col text-left max-w-[120px] md:max-w-[160px] truncate">
+              <div className="hidden xl:flex flex-col text-left max-w-[100px] truncate">
                 <span className="text-xs font-semibold text-gray-200 truncate">{currentUser.name}</span>
-                <span className="text-[9px] text-gray-400 font-mono truncate">{currentUser.email}</span>
               </div>
               <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-md ${
                 isAdmin 
@@ -335,7 +334,7 @@ export const App: React.FC = () => {
             {/* Logout Button */}
             <button
               onClick={handleLogout}
-              className="p-2 text-gray-400 hover:text-rose-400 hover:bg-gray-800/80 rounded-xl transition-colors border border-gray-800 cursor-pointer shadow-xs"
+              className="p-1.5 sm:p-2 text-gray-400 hover:text-rose-400 hover:bg-gray-800/80 rounded-xl transition-colors border border-gray-800 cursor-pointer shadow-xs"
               title="Keluar / Logout"
             >
               <LogOut className="w-4 h-4" />
@@ -344,7 +343,7 @@ export const App: React.FC = () => {
             {/* Hamburger Button (Mobile & Tablet) */}
             <button
               onClick={() => setMobileMenuOpen(true)}
-              className="md:hidden p-2 text-gray-300 hover:text-white hover:bg-gray-800 rounded-xl border border-gray-800 transition cursor-pointer shadow-xs"
+              className="lg:hidden p-1.5 sm:p-2 text-gray-300 hover:text-white hover:bg-gray-800 rounded-xl border border-gray-800 transition cursor-pointer shadow-xs"
               title="Buka Menu"
             >
               <Menu className="w-5 h-5" />
@@ -353,9 +352,8 @@ export const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Content Area (Diberi padding-bottom di mobile agar tidak tertutup sticky bottom bar) */}
-      {/* Main Container Penuh dengan Padding Rapi */}
-      <main className="flex-1 w-full px-3.5 sm:px-6 lg:px-8 py-4 sm:py-6 pb-24 md:pb-12">
+      {/* Main Content Area: Kembalikan max-w-7xl proporsional */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3.5 sm:p-6 lg:p-8 pb-24 lg:pb-12">
         {activeTab === 'playground' && <Playground />}
         {activeTab === 'monitor' && <RealtimeMonitor />}
         {activeTab === 'sessions' && <SessionsPage />}
