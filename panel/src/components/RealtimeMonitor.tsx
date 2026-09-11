@@ -10,7 +10,7 @@ import { apiGetSessions, apiGetSessionMessages, apiSendBulk, apiGetAntiBan, apiU
 import { Toast } from './Toast';
 import { AutoRotateSettings } from './AutoRotateSettings';
 
-export const RealtimeMonitor: React.FC = () => {
+export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = false }) => {
   const [subTab, setSubTab] = useState<'monitor' | 'autorotate'>('monitor');
   const [queue, setQueue] = useState<QueueItem[]>(EMPTY_QUEUE);
   const [sessions, setSessions] = useState<Session[]>(EMPTY_SESSIONS);
@@ -579,20 +579,22 @@ export const RealtimeMonitor: React.FC = () => {
               >
                 Broadcast
               </button>
-              <button
-                type="button"
-                disabled={savingAntiBan || !selectedSessionId}
-                onClick={() => handleSelectPreset('custom')}
-                className={`px-2.5 py-1 rounded-md font-medium transition flex items-center gap-1 ${
-                  activePreset === 'custom'
-                    ? 'bg-amber-900/60 text-amber-300 border border-amber-700/60 shadow-sm'
-                    : 'text-gray-400 hover:text-gray-200'
-                }`}
-                title="Kustomisasi manual seluruh parameter pacing & proteksi"
-              >
-                <Settings2 size={12} />
-                Custom
-              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  disabled={savingAntiBan || !selectedSessionId}
+                  onClick={() => handleSelectPreset('custom')}
+                  className={`px-2.5 py-1 rounded-md font-medium transition flex items-center gap-1 ${
+                    activePreset === 'custom'
+                      ? 'bg-amber-900/60 text-amber-300 border border-amber-700/60 shadow-sm'
+                      : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                  title="Kustomisasi manual seluruh parameter pacing & proteksi (Khusus Admin)"
+                >
+                  <Settings2 size={12} />
+                  Custom
+                </button>
+              )}
             </div>
 
             {antiBanData?.replyRatio?.contactsOnCooldown > 0 && (

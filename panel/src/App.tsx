@@ -355,7 +355,7 @@ export const App: React.FC = () => {
       {/* Main Content Area: Kembalikan max-w-7xl proporsional */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-3.5 sm:p-6 lg:p-8 pb-24 lg:pb-12">
         {activeTab === 'playground' && <Playground />}
-        {activeTab === 'monitor' && <RealtimeMonitor />}
+        {activeTab === 'monitor' && <RealtimeMonitor isAdmin={isAdmin} />}
         {activeTab === 'sessions' && <SessionsPage />}
         {activeTab === 'logs' && <ApiLogsPage isAdmin={isAdmin} showToast={(msg, type) => showToast(msg, type === 'error' ? 'error' : 'success')} />}
         {activeTab === 'docs' && <Docs />}

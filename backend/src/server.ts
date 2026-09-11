@@ -519,6 +519,17 @@ app.get('/api/v1/sessions/:id', { preHandler: requireAuth }, async (req, reply) 
 // Status engine anti-ban session (warmup, rate limiter, timelock, circadian)
 app.get('/api/v1/sessions/:id/antiban', { preHandler: requireAuth }, async (req, reply) => {
   const { id } = req.params as { id: string };
+  const user = req.apiKeyUser;
+
+  try {
+    const session = await manager.getSession(id);
+    if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
+      return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
+    }
+  } catch {
+    return reply.code(404).send({ error: 'Session tidak ditemukan' });
+  }
+
   const status = manager.getAntiBanStatus(id);
   if (!status) return reply.code(404).send({ error: 'Session tidak ditemukan' });
   return { sessionId: id, antiBan: status };
@@ -527,8 +538,30 @@ app.get('/api/v1/sessions/:id/antiban', { preHandler: requireAuth }, async (req,
 // Update konfigurasi anti-ban per session (preset & custom tuning)
 app.put('/api/v1/sessions/:id/antiban', { preHandler: requireAuth }, async (req, reply) => {
   const { id } = req.params as { id: string };
+  const user = req.apiKeyUser;
+
+  try {
+    const session = await manager.getSession(id);
+    if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
+      return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
+    }
+  } catch {
+    return reply.code(404).send({ error: 'Session tidak ditemukan' });
+  }
+
   const body = (req.body || {}) as { preset?: string; config?: any };
   const preset = body.preset || 'balanced';
+
+  // Proteksi Hak Akses Opsi A:
+  // User biasa HANYA boleh memilih preset standar ('strict' | 'balanced' | 'broadcast').
+  // Custom tuning (konfigurasi manual delay/sliding window mentah) hanya diizinkan untuk ADMIN.
+  if (user && user.role !== 'admin') {
+    if (preset === 'custom' || body.config) {
+      return reply.code(403).send({
+        error: 'Akses ditolak: Penyesuaian konfigurasi custom hanya dapat dilakukan oleh Admin. Anda hanya dapat memilih preset standar (Strict, Balanced, Broadcast).'
+      });
+    }
+  }
 
   try {
     const updated = manager.updateAntiBanSettings(id, preset, body.config);
@@ -541,6 +574,17 @@ app.put('/api/v1/sessions/:id/antiban', { preHandler: requireAuth }, async (req,
 // Reset cooldown Reply Ratio (opsional per target JID atau semua kontak)
 app.post('/api/v1/sessions/:id/antiban/reset-cooldown', { preHandler: requireAuth }, async (req, reply) => {
   const { id } = req.params as { id: string };
+  const user = req.apiKeyUser;
+
+  try {
+    const session = await manager.getSession(id);
+    if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
+      return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
+    }
+  } catch {
+    return reply.code(404).send({ error: 'Session tidak ditemukan' });
+  }
+
   const body = (req.body || {}) as { jid?: string };
   try {
     const replyRatioStats = manager.resetReplyRatioCooldown(id, body.jid);
