@@ -12,7 +12,7 @@ import { requireApiKey, requireJwt, requireAdmin, requireAuth } from './auth.js'
 import { hashPassword, verifyPassword, generateApiKey, rateLimitHook, checkLoginBruteForce, recordLoginFailure, recordLoginSuccess, verifyTurnstileToken, getClientIp } from './security.js';
 import {
   getUserByEmail, getUserById, listUsers, createUser,
-  upsertWebhook, listWebhooks, listMessages, updateUser, deleteUser, setUserPassword, setUserApiKey,
+  upsertWebhook, listWebhooks, listMessages, listMessagesPaged, updateUser, deleteUser, setUserPassword, setUserApiKey,
   setUserBlastPin, createBlastLaunchToken, verifyAndBurnBlastLaunchToken,
   getMessageById, db,
   getSetting, getAllSettings, setSettings, getAllUserSettings, setUserSettings, upsertGoogleUser, checkAndIncrementWeeklyQuota, getUserLogs, insertApiLog, listApiLogs, deleteApiLogs, clearApiLogs,
@@ -899,10 +899,35 @@ app.get('/api/v1/usage', { preHandler: requireApiKey }, async (req) => {
 
 app.get('/api/v1/messages/:sessionId', { preHandler: requireAuth }, async (req) => {
   const { sessionId } = req.params as { sessionId: string };
+  const query = (req.query || {}) as {
+    batchId?: string;
+    limit?: string;
+    offset?: string;
+    status?: string;
+    phones?: string;
+  };
   const user = req.apiKeyUser!;
   const filterUserId = user.role === 'admin' ? undefined : user.id;
   const targetSession = (sessionId === 'auto' || sessionId === 'all') ? undefined : sessionId;
-  return { messages: listMessages(targetSession, filterUserId, 50) };
+
+  const statuses = typeof query.status === 'string' && query.status.length > 0
+    ? query.status.split(',').map((s) => s.trim()).filter(Boolean)
+    : undefined;
+  const phones = typeof query.phones === 'string' && query.phones.length > 0
+    ? query.phones.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 200)
+    : undefined;
+
+  const result = listMessagesPaged({
+    sessionId: targetSession,
+    filterUserId,
+    batchId: query.batchId || undefined,
+    statuses,
+    phones,
+    limit: query.limit ? Number(query.limit) : 50,
+    offset: query.offset ? Number(query.offset) : 0,
+  });
+
+  return { messages: result.messages, total: result.total };
 });
 
 // ============ Media Upload ============

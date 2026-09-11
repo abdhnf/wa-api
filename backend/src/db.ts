@@ -549,43 +549,102 @@ export function getMessageByWaId(waMessageId: string): OutboundMessage | null {
   return row ? JSON.parse(row.payload) : null;
 }
 
-export function listMessages(sessionId?: string, filterUserId?: string, limit = 50): OutboundMessage[] {
-  let rows: any[];
-  if (sessionId && filterUserId) {
-    rows = db.prepare('SELECT * FROM messages WHERE session_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT ?').all(sessionId, filterUserId, limit);
-  } else if (sessionId) {
-    rows = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?').all(sessionId, limit);
-  } else if (filterUserId) {
-    rows = db.prepare('SELECT * FROM messages WHERE user_id = ? ORDER BY created_at DESC LIMIT ?').all(filterUserId, limit);
-  } else {
-    rows = db.prepare('SELECT * FROM messages ORDER BY created_at DESC LIMIT ?').all(limit);
+export interface ListMessagesOptions {
+  sessionId?: string;
+  filterUserId?: string;
+  batchId?: string;
+  limit?: number;
+  offset?: number;
+  statuses?: string[];
+  /** Daftar nomor tujuan; dipakai halaman antrean untuk mengambil status
+   * hanya bagi baris yang sedang terlihat. */
+  phones?: string[];
+}
+
+/**
+ * Baca pesan dengan filter dan paginasi.
+ * `limit`/`offset` dipakai halaman antrean dashboard; `batchId` memisahkan
+ * kampanye supaya status satu kampanye tidak bocor ke kampanye lain.
+ */
+export function listMessages(options?: ListMessagesOptions | string, filterUserId?: string, limit = 50): OutboundMessage[] {
+  const opts: ListMessagesOptions = (typeof options === 'string' || options === undefined)
+    ? { sessionId: options as string | undefined, filterUserId, limit }
+    : options;
+
+  const { rows } = queryMessages(opts);
+  return rows.map(mapMessageRow);
+}
+
+/** Baris pesan + total kecocokan filter, untuk paginasi halaman antrean. */
+export function listMessagesPaged(options: ListMessagesOptions): { messages: OutboundMessage[]; total: number } {
+  const { rows, total } = queryMessages(options);
+  return { messages: rows.map(mapMessageRow), total };
+}
+
+function queryMessages(options: ListMessagesOptions): { rows: any[]; total: number } {
+  const where: string[] = [];
+  const params: any[] = [];
+
+  if (options.sessionId && options.sessionId !== 'all' && options.sessionId !== 'auto') {
+    where.push('session_id = ?');
+    params.push(options.sessionId);
   }
-  return rows.map((r) => {
-    try {
-      const p = JSON.parse(r.payload);
-      p.id = r.id || p.id;
-      p.sessionId = r.session_id || p.sessionId;
-      p.userId = r.user_id || p.userId || undefined;
-      p.to = r.recipient || p.to;
-      p.mode = r.mode || p.mode;
-      p.status = r.status || p.status;
-      p.jitterDelayMs = typeof r.jitter_delay_ms === 'number' ? r.jitter_delay_ms : (p.jitterDelayMs || 0);
-      p.timestamp = r.created_at || p.timestamp;
-      return p;
-    } catch {
-      return {
-        id: r.id,
-        sessionId: r.session_id,
-        userId: r.user_id,
-        mode: r.mode,
-        to: r.recipient,
-        text: r.payload,
-        status: r.status,
-        jitterDelayMs: typeof r.jitter_delay_ms === 'number' ? r.jitter_delay_ms : 0,
-        timestamp: r.created_at,
-      };
-    }
-  });
+  if (options.filterUserId) {
+    where.push('user_id = ?');
+    params.push(options.filterUserId);
+  }
+  if (options.batchId) {
+    where.push('batch_id = ?');
+    params.push(options.batchId);
+  }
+  if (options.statuses && options.statuses.length > 0) {
+    where.push(`status IN (${options.statuses.map(() => '?').join(', ')})`);
+    params.push(...options.statuses);
+  }
+  if (options.phones && options.phones.length > 0) {
+    where.push(`recipient IN (${options.phones.map(() => '?').join(', ')})`);
+    params.push(...options.phones);
+  }
+
+  const clause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  const total = (db.prepare(`SELECT COUNT(*) AS c FROM messages ${clause}`).get(...params) as any).c as number;
+
+  const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+  const offset = Math.max(options.offset ?? 0, 0);
+  const rows = db
+    .prepare(`SELECT * FROM messages ${clause} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`)
+    .all(...params, limit, offset);
+
+  return { rows, total };
+}
+
+function mapMessageRow(r: any): OutboundMessage {
+  try {
+    const p = JSON.parse(r.payload);
+    p.id = r.id || p.id;
+    p.sessionId = r.session_id || p.sessionId;
+    p.userId = r.user_id || p.userId || undefined;
+    p.batchId = r.batch_id || p.batchId || undefined;
+    p.to = r.recipient || p.to;
+    p.mode = r.mode || p.mode;
+    p.status = r.status || p.status;
+    p.jitterDelayMs = typeof r.jitter_delay_ms === 'number' ? r.jitter_delay_ms : (p.jitterDelayMs || 0);
+    p.timestamp = r.created_at || p.timestamp;
+    return p;
+  } catch {
+    return {
+      id: r.id,
+      sessionId: r.session_id,
+      userId: r.user_id,
+      batchId: r.batch_id || undefined,
+      mode: r.mode,
+      to: r.recipient,
+      text: r.payload,
+      status: r.status,
+      jitterDelayMs: typeof r.jitter_delay_ms === 'number' ? r.jitter_delay_ms : 0,
+      timestamp: r.created_at,
+    } as OutboundMessage;
+  }
 }
 
 /** Ambil log aktivitas, sesi, dan pesan lengkap untuk admin melihat riwayat user */
