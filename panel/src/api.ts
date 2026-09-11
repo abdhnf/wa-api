@@ -292,6 +292,26 @@ export async function apiGetAntiBan(sessionId: string) {
   return request(`/sessions/${sessionId}/antiban`);
 }
 
+export async function apiUpdateAntiBan(sessionId: string, data: { preset: string; config?: any }) {
+  return request(`/sessions/${sessionId}/antiban`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function apiResetReplyRatioCooldown(sessionId: string, jid?: string) {
+  return request(`/sessions/${sessionId}/antiban/reset-cooldown`, {
+    method: 'POST',
+    body: JSON.stringify({ jid }),
+  });
+}
+
+export async function apiRetryMessage(messageId: string) {
+  return request(`/messages/${messageId}/retry`, {
+    method: 'POST',
+  });
+}
+
 export async function apiGetAuthConfig() {
   return request('/auth/config');
 }

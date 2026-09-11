@@ -67,6 +67,71 @@ export const DEFAULT_ANTIBAN_CONFIG: AntiBanConfig = {
   typingWPMStdDev: 15,
 };
 
+export interface AntiBanPreset {
+  id: 'strict' | 'balanced' | 'broadcast' | 'custom';
+  name: string;
+  description: string;
+  rateLimiter: Partial<AntiBanConfig>;
+  replyRatio: Partial<ReplyRatioConfig>;
+}
+
+export const ANTIBAN_PRESETS: Record<string, AntiBanPreset> = {
+  strict: {
+    id: 'strict',
+    name: 'Strict / High Security',
+    description: 'Keamanan maksimum untuk nomor baru atau akun pribadi penting. Delay panjang, kuota ketat, Reply Ratio 10%.',
+    rateLimiter: {
+      minDelayMs: 3000,
+      maxDelayMs: 8000,
+      maxPerMinute: 5,
+      maxPerHour: 100,
+      maxIdenticalMessages: 2,
+    },
+    replyRatio: {
+      enabled: true,
+      minRatio: 0.1,
+      minMessagesBeforeEnforce: 5,
+      cooldownHoursOnViolation: 24,
+    },
+  },
+  balanced: {
+    id: 'balanced',
+    name: 'Balanced / Standard',
+    description: 'Profil standar operasional CRM interaktif. Delay manusiawi 1.5 - 5s, Reply Ratio aktif 10%.',
+    rateLimiter: {
+      minDelayMs: 1500,
+      maxDelayMs: 5000,
+      maxPerMinute: 8,
+      maxPerHour: 200,
+      maxIdenticalMessages: 3,
+    },
+    replyRatio: {
+      enabled: true,
+      minRatio: 0.1,
+      minMessagesBeforeEnforce: 5,
+      cooldownHoursOnViolation: 24,
+    },
+  },
+  broadcast: {
+    id: 'broadcast',
+    name: 'Broadcast / Notification',
+    description: 'Khusus blast pengumuman & notifikasi satu arah. Reply Ratio dinonaktifkan agar tidak terkena cooldown, delay 2 - 5s.',
+    rateLimiter: {
+      minDelayMs: 2000,
+      maxDelayMs: 5000,
+      maxPerMinute: 10,
+      maxPerHour: 300,
+      maxIdenticalMessages: 10,
+    },
+    replyRatio: {
+      enabled: false,
+      minRatio: 0.0,
+      minMessagesBeforeEnforce: 999999,
+      cooldownHoursOnViolation: 0,
+    },
+  },
+};
+
 const MS = { MIN: 60_000, HOUR: 3_600_000, DAY: 86_400_000 };
 
 /** Gaussian (Box-Muller) jitter in [min,max], clustered around middle */
@@ -200,6 +265,14 @@ export class RateLimiter {
       burstCount: this.burstCount,
       lastMessageTime: this.lastMessageTime,
     };
+  }
+
+  updateConfig(cfg: Partial<AntiBanConfig>): void {
+    this.cfg = { ...this.cfg, ...cfg };
+  }
+
+  getConfig(): AntiBanConfig {
+    return { ...this.cfg };
   }
 
   restore(state: AntiBanState['rateLimiter']): void {
@@ -736,6 +809,31 @@ export class ReplyRatioGuard {
     if (state.contacts && Array.isArray(state.contacts)) this.contacts = new Map(state.contacts);
     this.globalSent = state.globalSent ?? 0;
     this.globalReceived = state.globalReceived ?? 0;
+  }
+
+  resetCooldown(jid?: string): void {
+    if (jid) {
+      const record = this.contacts.get(jid);
+      if (record) {
+        delete record.cooledUntil;
+        this.contacts.set(jid, record);
+      }
+    } else {
+      for (const [key, record] of this.contacts.entries()) {
+        if (record.cooledUntil) {
+          delete record.cooledUntil;
+          this.contacts.set(key, record);
+        }
+      }
+    }
+  }
+
+  updateConfig(cfg: Partial<ReplyRatioConfig>): void {
+    this.config = { ...this.config, ...cfg };
+  }
+
+  getConfig(): Required<ReplyRatioConfig> {
+    return { ...this.config };
   }
 
   private isGroup(jid: string): boolean {

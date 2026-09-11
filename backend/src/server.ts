@@ -2,13 +2,16 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import { z } from 'zod';
+import { createReadStream } from 'node:fs';
+import { mkdir, writeFile, unlink, stat } from 'node:fs/promises';
+import { join, resolve, extname } from 'node:path';
 import { config } from './config.js';
 import { SessionManager } from './session-manager.js';
 import { BaileysEngine } from './engine/BaileysEngine.js';
 import { requireApiKey, requireJwt, requireAdmin, requireAuth } from './auth.js';
 import { hashPassword, verifyPassword, generateApiKey, rateLimitHook, checkLoginBruteForce, recordLoginFailure, recordLoginSuccess, verifyTurnstileToken, getClientIp } from './security.js';
 import {
-  getUserByEmail, getUserById, listUsers, createUser, incrementUsage,
+  getUserByEmail, getUserById, listUsers, createUser,
   upsertWebhook, listWebhooks, listMessages, updateUser, deleteUser, setUserPassword, setUserApiKey,
   setUserBlastPin, createBlastLaunchToken, verifyAndBurnBlastLaunchToken,
   getMessageById, db,
@@ -73,6 +76,7 @@ const sendTextSchema = z.object({
   to: z.string().regex(/^\d+$/, 'Nomor harus numerik (format 628xxx)'),
   text: z.string().min(1),
   priority: z.enum(['high', 'normal']).optional(),
+  batchId: z.string().optional(),
 });
 
 const sendMediaSchema = z.object({
@@ -85,6 +89,7 @@ const sendMediaSchema = z.object({
   fileName: z.string().optional(),
   caption: z.string().optional(),
   priority: z.enum(['high', 'normal']).optional(),
+  batchId: z.string().optional(),
 }).refine((d) => d.mediaUrl || d.mediaBase64, { message: 'Butuh mediaUrl atau mediaBase64' });
 
 const sendLocationSchema = z.object({
@@ -94,6 +99,7 @@ const sendLocationSchema = z.object({
   longitude: z.number().min(-180).max(180),
   name: z.string().optional(),
   address: z.string().optional(),
+  batchId: z.string().optional(),
 });
 
 const sendBulkSchema = z.object({
@@ -518,6 +524,32 @@ app.get('/api/v1/sessions/:id/antiban', { preHandler: requireAuth }, async (req,
   return { sessionId: id, antiBan: status };
 });
 
+// Update konfigurasi anti-ban per session (preset & custom tuning)
+app.put('/api/v1/sessions/:id/antiban', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const body = (req.body || {}) as { preset?: string; config?: any };
+  const preset = body.preset || 'balanced';
+
+  try {
+    const updated = manager.updateAntiBanSettings(id, preset, body.config);
+    return { success: true, sessionId: id, antiBan: updated };
+  } catch (err: any) {
+    return reply.code(500).send({ error: err.message || 'Gagal update setting anti-ban' });
+  }
+});
+
+// Reset cooldown Reply Ratio (opsional per target JID atau semua kontak)
+app.post('/api/v1/sessions/:id/antiban/reset-cooldown', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const body = (req.body || {}) as { jid?: string };
+  try {
+    const replyRatioStats = manager.resetReplyRatioCooldown(id, body.jid);
+    return { success: true, sessionId: id, replyRatio: replyRatioStats };
+  } catch (err: any) {
+    return reply.code(500).send({ error: err.message || 'Gagal reset cooldown' });
+  }
+});
+
 app.post('/api/v1/sessions', { preHandler: requireAuth }, async (req, reply) => {
   const user = req.apiKeyUser!;
   const body = (req.body || {}) as { name?: string; phone?: string };
@@ -621,7 +653,7 @@ app.post('/api/v1/messages/send', { preHandler: requireAuth }, async (req, reply
   } catch (err: any) {
     return reply.code(400).send({ error: err.message || 'Gagal memproses sesi WhatsApp' });
   }
-  const msg = await manager.enqueue({ sessionId: resolved.sessionId, userId: user.id, mode: 'text', to: data.to, text: data.text, priority: data.priority });
+  const msg = await manager.enqueue({ sessionId: resolved.sessionId, userId: user.id, mode: 'text', to: data.to, text: data.text, priority: data.priority, batchId: data.batchId });
   return reply.code(202).send({ success: true, messageId: msg.id, type: 'text', status: msg.status, jitterDelayMs: msg.jitterDelayMs });
 });
 
@@ -631,6 +663,13 @@ app.post('/api/v1/messages/send-media', { preHandler: requireAuth }, async (req,
   if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
   const { data } = parsed;
 
+  // Kuota periode (weekly/daily/monthly) — harus dicek untuk SEMUA mode kirim,
+  // bukan hanya teks/bulk, supaya meter kuota tidak bisa dilewati lewat media.
+  const quota = checkAndIncrementWeeklyQuota(user.id);
+  if (!quota.allowed) {
+    return reply.code(429).send({ error: quota.reason, quota: quota.limit, used: quota.used, resetAt: quota.resetAt });
+  }
+
   let resolved;
   try {
     resolved = await manager.resolveSession(data.sessionId, data.to, user.id, user.role);
@@ -638,12 +677,11 @@ app.post('/api/v1/messages/send-media', { preHandler: requireAuth }, async (req,
     return reply.code(400).send({ error: err.message || 'Gagal memproses sesi WhatsApp' });
   }
   const msg = await manager.enqueue({
-    sessionId: resolved.sessionId, mode: 'media', to: data.to,
+    sessionId: resolved.sessionId, userId: user.id, mode: 'media', to: data.to,
     mediaUrl: data.mediaUrl, mediaBase64: data.mediaBase64, mediaMimeType: data.mediaMimeType,
     mediaType: data.mediaType, fileName: data.fileName, caption: data.caption,
-    priority: data.priority,
+    priority: data.priority, batchId: data.batchId,
   });
-  incrementUsage(req.apiKeyUser!.id);
   return reply.code(202).send({ success: true, messageId: msg.id, type: 'media', status: msg.status });
 });
 
@@ -653,6 +691,12 @@ app.post('/api/v1/messages/send-location', { preHandler: requireAuth }, async (r
   if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
   const { data } = parsed;
 
+  // Kuota periode — sama seperti mode teks/media.
+  const quota = checkAndIncrementWeeklyQuota(user.id);
+  if (!quota.allowed) {
+    return reply.code(429).send({ error: quota.reason, quota: quota.limit, used: quota.used, resetAt: quota.resetAt });
+  }
+
   let resolved;
   try {
     resolved = await manager.resolveSession(data.sessionId, data.to, user.id, user.role);
@@ -660,11 +704,11 @@ app.post('/api/v1/messages/send-location', { preHandler: requireAuth }, async (r
     return reply.code(400).send({ error: err.message || 'Gagal memproses sesi WhatsApp' });
   }
   const msg = await manager.enqueue({
-    sessionId: resolved.sessionId, mode: 'location', to: data.to,
+    sessionId: resolved.sessionId, userId: user.id, mode: 'location', to: data.to,
     latitude: data.latitude, longitude: data.longitude,
     name: data.name, address: data.address,
+    batchId: data.batchId,
   });
-  incrementUsage(req.apiKeyUser!.id);
   return reply.code(202).send({ success: true, messageId: msg.id, type: 'location', status: msg.status });
 });
 
@@ -716,6 +760,17 @@ app.get('/api/v1/messages/status/:id', { preHandler: requireAuth }, async (req, 
   return { message: msg };
 });
 
+// Endpoint retry pengiriman pesan yang gagal
+app.post('/api/v1/messages/:id/retry', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string };
+  try {
+    const retried = await manager.retryMessage(id);
+    return { success: true, message: retried };
+  } catch (err: any) {
+    return reply.code(400).send({ error: err.message || 'Gagal retry pesan' });
+  }
+});
+
 app.get('/api/v1/messages/status/bulk/:batchId', { preHandler: requireAuth }, async (req, reply) => {
   const { batchId } = req.params as { batchId: string };
   const rows = db.prepare('SELECT payload FROM messages WHERE batch_id = ?').all(batchId) as any[];
@@ -746,9 +801,23 @@ app.get('/api/v1/webhooks', { preHandler: requireApiKey }, async (req) => {
 });
 
 // ============ Usage & Health ============
+// Catatan: quotaPerDay/usedToday dipertahankan untuk kompatibilitas panel lama.
+// Kuota otoritatif sekarang berbasis periode (quotaLimit/usedInPeriod/quotaPeriod),
+// dipakai konsumen seperti WhatsApp Blast Dashboard.
 app.get('/api/v1/usage', { preHandler: requireApiKey }, async (req) => {
   const u = req.apiKeyUser!;
-  return { quotaPerDay: u.quotaPerDay, usedToday: u.usedToday, remaining: Math.max(0, u.quotaPerDay - u.usedToday) };
+  const quotaLimit = u.quotaLimit ?? u.quotaPerWeek ?? 0;
+  const usedInPeriod = u.usedInPeriod ?? 0;
+  return {
+    quotaPerDay: u.quotaPerDay,
+    usedToday: u.usedToday,
+    remaining: Math.max(0, u.quotaPerDay - u.usedToday),
+    quotaLimit,
+    usedInPeriod,
+    quotaPeriod: u.quotaPeriod ?? 'weekly',
+    quotaResetAt: u.quotaResetAt,
+    remainingInPeriod: u.role === 'admin' ? null : Math.max(0, quotaLimit - usedInPeriod),
+  };
 });
 
 app.get('/api/v1/messages/:sessionId', { preHandler: requireAuth }, async (req) => {
@@ -758,6 +827,156 @@ app.get('/api/v1/messages/:sessionId', { preHandler: requireAuth }, async (req) 
   const targetSession = (sessionId === 'auto' || sessionId === 'all') ? undefined : sessionId;
   return { messages: listMessages(targetSession, filterUserId, 50) };
 });
+
+// ============ Media Upload ============
+// Jalur unggah media dari klien eksternal (mis. WhatsApp Blast Dashboard):
+//   1. POST berkas ke /api/v1/media/upload  -> dapat { id, url }
+//   2. Kirim { mediaUrl: url } ke /api/v1/messages/send-media
+//   3. Setelah wa-api selesai mengunduh, klien boleh DELETE /api/v1/media/:id
+// Langkah 3 opsional: berkas dibersihkan otomatis lewat TTL di bawah.
+// Ini pelengkap, BUKAN pengganti mediaBase64 — klien yang belum punya
+// penyimpanan sendiri tetap bisa mengirim base64 seperti sebelumnya.
+const MEDIA_DIR = process.env.MEDIA_DIR || resolve(process.cwd(), 'data', 'media');
+const MEDIA_TTL_MS = Number(process.env.MEDIA_TTL_MS || 6 * 60 * 60 * 1000);
+
+const MEDIA_EXT_BY_MIME: Record<string, string> = {
+  'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif',
+  'application/pdf': '.pdf',
+  'video/mp4': '.mp4', 'video/quicktime': '.mov',
+  'audio/mpeg': '.mp3', 'audio/ogg': '.ogg', 'audio/mp4': '.m4a', 'audio/webm': '.webm',
+  'application/msword': '.doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.ms-excel': '.xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+};
+
+const MEDIA_ID_PATTERN = /^[a-f0-9]{16,32}\.[a-z0-9]{2,5}$/i;
+
+function resolveMediaExtension(fileName: string, mimeType: string): string {
+  const fromName = extname(fileName || '').toLowerCase();
+  if (fromName && /^\.[a-z0-9]{2,5}$/.test(fromName)) return fromName;
+  const cleanMime = (mimeType || '').split(';')[0].trim().toLowerCase();
+  return MEDIA_EXT_BY_MIME[cleanMime] || '.bin';
+}
+
+function mediaAbsoluteUrl(req: { headers: Record<string, any> }, id: string): string {
+  const forwardedHost = req.headers['x-forwarded-host'];
+  const host = forwardedHost || req.headers.host || `127.0.0.1:${config.port}`;
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const proto = forwardedProto || 'http';
+  return `${proto}://${host}/api/v1/media/${id}`;
+}
+
+// Parser biner untuk unggahan mentah (image/*, video/*, audio/*, pdf, octet-stream).
+// application/json tetap ditangani parser bawaan Fastify.
+app.addContentTypeParser(/^(image|video|audio)\//, { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
+for (const rawType of ['application/octet-stream', 'application/pdf']) {
+  app.addContentTypeParser(rawType, { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
+}
+
+app.post('/api/v1/media/upload', { preHandler: requireAuth }, async (req, reply) => {
+  try {
+    await mkdir(MEDIA_DIR, { recursive: true });
+
+    const contentType = String(req.headers['content-type'] || '');
+    let buffer: Buffer;
+    let declaredName = '';
+    let declaredMime = contentType.split(';')[0].trim().toLowerCase();
+
+    if (contentType.includes('application/json')) {
+      const body = (req.body || {}) as { data?: string; base64?: string; mimeType?: string; fileName?: string };
+      const raw = (body.data || body.base64 || '').replace(/^data:[^;]+;base64,/, '');
+      if (!raw) return reply.code(400).send({ error: 'Field data/base64 wajib berisi konten berkas.' });
+      buffer = Buffer.from(raw, 'base64');
+      declaredName = body.fileName || '';
+      declaredMime = (body.mimeType || '').toLowerCase();
+    } else if (Buffer.isBuffer(req.body)) {
+      buffer = req.body;
+      const rawName = req.headers['x-file-name'];
+      declaredName = typeof rawName === 'string' ? decodeURIComponent(rawName) : '';
+    } else {
+      return reply.code(415).send({
+        error: 'Content-Type tidak didukung. Kirim berkas biner, atau JSON { data, mimeType, fileName }.',
+      });
+    }
+
+    if (!buffer.length) return reply.code(400).send({ error: 'Berkas kosong.' });
+
+    const ext = resolveMediaExtension(declaredName, declaredMime);
+    const id = `${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}${ext}`;
+    await writeFile(join(MEDIA_DIR, id), buffer);
+
+    return reply.code(201).send({
+      success: true,
+      id,
+      url: mediaAbsoluteUrl(req as any, id),
+      size: buffer.length,
+      mimeType: declaredMime || undefined,
+      expiresInMs: MEDIA_TTL_MS,
+    });
+  } catch (err: any) {
+    req.log.error({ err }, 'media upload gagal');
+    return reply.code(500).send({ error: err?.message || 'Gagal menyimpan berkas media.' });
+  }
+});
+
+app.get('/api/v1/media/:id', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  if (!MEDIA_ID_PATTERN.test(id)) return reply.code(400).send({ error: 'ID media tidak valid.' });
+
+  const filePath = join(MEDIA_DIR, id);
+  // Pertahanan path traversal meski pola ID sudah ketat.
+  if (!resolve(filePath).startsWith(resolve(MEDIA_DIR))) {
+    return reply.code(400).send({ error: 'ID media tidak valid.' });
+  }
+
+  try {
+    const info = await stat(filePath);
+    if (!info.isFile()) throw new Error('bukan berkas');
+    const ext = extname(id).toLowerCase();
+    const mime = Object.entries(MEDIA_EXT_BY_MIME).find(([, e]) => e === ext)?.[0] || 'application/octet-stream';
+    reply.header('Content-Type', mime);
+    reply.header('Content-Length', String(info.size));
+    reply.header('Cache-Control', 'private, max-age=3600');
+    return reply.send(createReadStream(filePath));
+  } catch {
+    return reply.code(404).send({ error: 'Media tidak ditemukan atau sudah dibersihkan.' });
+  }
+});
+
+app.delete('/api/v1/media/:id', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string };
+  if (!MEDIA_ID_PATTERN.test(id)) return reply.code(400).send({ error: 'ID media tidak valid.' });
+  try {
+    await unlink(join(MEDIA_DIR, id));
+    return { success: true, deleted: id };
+  } catch {
+    return { success: false, message: 'Media sudah tidak ada.' };
+  }
+});
+
+// Pembersih berkas media kedaluwarsa (berjalan tiap 30 menit, non-blocking).
+setInterval(() => {
+  void (async () => {
+    try {
+      const { readdir } = await import('node:fs/promises');
+      const entries = await readdir(MEDIA_DIR).catch(() => [] as string[]);
+      const now = Date.now();
+      let removed = 0;
+      for (const name of entries) {
+        const full = join(MEDIA_DIR, name);
+        const info = await stat(full).catch(() => null);
+        if (info?.isFile() && now - info.mtimeMs > MEDIA_TTL_MS) {
+          await unlink(full).catch(() => {});
+          removed++;
+        }
+      }
+      if (removed > 0) app.log.info(`[media-gc] ${removed} berkas media kedaluwarsa dibersihkan`);
+    } catch {
+      /* pembersihan bersifat best-effort */
+    }
+  })();
+}, 30 * 60 * 1000).unref();
 
 // Endpoint Admin: Lihat log & aktivitas user tertentu
 app.get('/api/v1/admin/users/:id/logs', { preHandler: requireAuth }, async (req, reply) => {

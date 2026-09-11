@@ -122,6 +122,8 @@ function ensureColumn(table: string, column: string, ddl: string): void {
 ensureColumn('messages', 'wa_message_id', 'TEXT');
 ensureColumn('messages', 'batch_id', 'TEXT');
 ensureColumn('sessions', 'antiban_state', 'TEXT');
+ensureColumn('sessions', 'antiban_preset', "TEXT DEFAULT 'balanced'");
+ensureColumn('sessions', 'antiban_config', 'TEXT');
 ensureColumn('users', 'google_id', 'TEXT');
 ensureColumn('users', 'auth_provider', "TEXT DEFAULT 'local'");
 ensureColumn('users', 'avatar_url', 'TEXT');
@@ -621,6 +623,25 @@ export function getAntiBanState(sessionId: string): string | null {
 
 export function saveAntiBanState(sessionId: string, state: string): void {
   db.prepare('UPDATE sessions SET antiban_state = ? WHERE id = ?').run(state, sessionId);
+}
+
+export function getSessionAntiBanSettings(sessionId: string): { preset: string; config: any | null } {
+  const row = db.prepare('SELECT antiban_preset, antiban_config FROM sessions WHERE id = ?').get(sessionId) as any;
+  let parsedConfig = null;
+  if (row?.antiban_config) {
+    try {
+      parsedConfig = JSON.parse(row.antiban_config);
+    } catch {}
+  }
+  return {
+    preset: row?.antiban_preset || 'balanced',
+    config: parsedConfig,
+  };
+}
+
+export function saveSessionAntiBanSettings(sessionId: string, preset: string, config: any): void {
+  const configJson = config ? JSON.stringify(config) : null;
+  db.prepare('UPDATE sessions SET antiban_preset = ?, antiban_config = ? WHERE id = ?').run(preset, configJson, sessionId);
 }
 
 export function deleteSession(id: string): void {

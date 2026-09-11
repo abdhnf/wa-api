@@ -12,8 +12,8 @@ function validatePhoneFormat(phone: string): { valid: boolean; normalized: strin
 }
 
 import { config } from './config.js';
-import { upsertSession, insertMessage, updateMessageStatus, listSessions as dbListSessions, getAntiBanState, saveAntiBanState, getSetting, getUserSetting, getLastSessionForRecipient, resetStuckMessages, getPendingMessages } from './db.js';
-import { RateLimiter, WarmUp, TimelockGuard, PresenceChoreographer, ReconnectThrottle, BanRecoveryOrchestrator, ReplyRatioGuard, ContactGraphWarmer, DEFAULT_ANTIBAN_CONFIG, type AntiBanState } from './antiban.js';
+import { upsertSession, insertMessage, updateMessageStatus, getMessageById, listSessions as dbListSessions, getAntiBanState, saveAntiBanState, getSessionAntiBanSettings, saveSessionAntiBanSettings, getSetting, getUserSetting, getLastSessionForRecipient, resetStuckMessages, getPendingMessages } from './db.js';
+import { RateLimiter, WarmUp, TimelockGuard, PresenceChoreographer, ReconnectThrottle, BanRecoveryOrchestrator, ReplyRatioGuard, ContactGraphWarmer, DEFAULT_ANTIBAN_CONFIG, ANTIBAN_PRESETS, type AntiBanPreset, type AntiBanState } from './antiban.js';
 import type { OutboundMessage, SessionInfo, QueueSessionStatus } from './types.js';
 import type { WhatsAppEngine } from './engine/WhatsAppEngine.js';
 
@@ -48,13 +48,28 @@ export class SessionManager {
     let ab = this.antiban.get(sessionId);
     if (ab) return ab;
 
-    const cfg = { ...DEFAULT_ANTIBAN_CONFIG, ...config.antiBan };
+    let cfg = { ...DEFAULT_ANTIBAN_CONFIG, ...config.antiBan };
+    const sessionSettings = getSessionAntiBanSettings(sessionId);
+    const activePreset = ANTIBAN_PRESETS[sessionSettings.preset] || ANTIBAN_PRESETS.balanced;
+
+    if (activePreset && activePreset.rateLimiter) {
+      cfg = { ...cfg, ...activePreset.rateLimiter };
+    }
+    if (sessionSettings.config?.rateLimiter) {
+      cfg = { ...cfg, ...sessionSettings.config.rateLimiter };
+    }
+
     let state: AntiBanState | null = null;
     try {
       const raw = getAntiBanState(sessionId);
       if (raw) state = JSON.parse(raw) as AntiBanState;
     } catch (e) {
       console.warn(`[session:${sessionId}] antiban_state korup, reset:`, e);
+    }
+
+    let replyRatioConfig = activePreset ? activePreset.replyRatio : {};
+    if (sessionSettings.config?.replyRatio) {
+      replyRatioConfig = { ...replyRatioConfig, ...sessionSettings.config.replyRatio };
     }
 
     ab = {
@@ -64,7 +79,7 @@ export class SessionManager {
       presence: new PresenceChoreographer(cfg),
       reconnect: new ReconnectThrottle(cfg),
       recovery: new BanRecoveryOrchestrator(cfg),
-      replyRatio: new ReplyRatioGuard(cfg),
+      replyRatio: new ReplyRatioGuard(replyRatioConfig),
       contactGraph: new ContactGraphWarmer(cfg),
     };
     if (state?.rateLimiter) {
@@ -108,7 +123,27 @@ export class SessionManager {
     }
   }
 
-  /** Antrekan pesan ke session dengan dukungan Priority Queue (VIP/OTP vs Normal/Blast). */
+  async retryMessage(messageId: string): Promise<OutboundMessage> {
+    const raw = getMessageById(messageId);
+    if (!raw) throw new Error('Pesan tidak ditemukan');
+
+    // Kembalikan status menjadi pending, hapus error lama, dan enqueue kembali
+    const refreshed: OutboundMessage = {
+      ...raw,
+      status: 'pending',
+      errorDetail: undefined,
+      timestamp: new Date().toISOString(),
+      jitterDelayMs: 0,
+    };
+    updateMessageStatus(messageId, 'pending', '', 0);
+
+    const q = refreshed.priority === 'high' ? this.vipQueues : this.normalQueues;
+    if (!q.has(refreshed.sessionId)) q.set(refreshed.sessionId, []);
+    q.get(refreshed.sessionId)!.push(refreshed);
+
+    void this.processQueue(refreshed.sessionId);
+    return refreshed;
+  }
   async enqueue(msg: Omit<OutboundMessage, 'id' | 'status' | 'jitterDelayMs' | 'timestamp'>): Promise<OutboundMessage> {
     const priority = msg.priority === 'high' ? 'high' : 'normal';
     const full: OutboundMessage = {
@@ -393,7 +428,14 @@ export class SessionManager {
   getAntiBanStatus(sessionId: string) {
     try {
       const ab = this.getAntiBan(sessionId);
+      const settings = getSessionAntiBanSettings(sessionId);
       return {
+        preset: settings.preset,
+        presets: ANTIBAN_PRESETS,
+        currentConfig: {
+          rateLimiter: ab.rateLimiter.getConfig(),
+          replyRatio: ab.replyRatio.getConfig(),
+        },
         warmup: ab.warmup.getStatus(),
         rateLimiter: ab.rateLimiter.getStats(),
         timelock: ab.timelock.getState(),
@@ -406,6 +448,41 @@ export class SessionManager {
     } catch (e) {
       return null;
     }
+  }
+
+  updateAntiBanSettings(sessionId: string, preset: string, customConfig?: any) {
+    saveSessionAntiBanSettings(sessionId, preset, customConfig || null);
+    // Reload / re-apply ke memory
+    const ab = this.getAntiBan(sessionId);
+    const targetPreset = ANTIBAN_PRESETS[preset] || ANTIBAN_PRESETS.balanced;
+
+    let mergedRateLimiter = { ...DEFAULT_ANTIBAN_CONFIG, ...config.antiBan };
+    if (targetPreset && targetPreset.rateLimiter) {
+      mergedRateLimiter = { ...mergedRateLimiter, ...targetPreset.rateLimiter };
+    }
+    if (customConfig?.rateLimiter) {
+      mergedRateLimiter = { ...mergedRateLimiter, ...customConfig.rateLimiter };
+    }
+    ab.rateLimiter.updateConfig(mergedRateLimiter);
+
+    let mergedReplyRatio = targetPreset ? { ...targetPreset.replyRatio } : {};
+    if (customConfig?.replyRatio) {
+      mergedReplyRatio = { ...mergedReplyRatio, ...customConfig.replyRatio };
+    }
+    ab.replyRatio.updateConfig(mergedReplyRatio);
+
+    // Jika preset broadcast atau dinonaktifkan, bersihkan cooldown lama yang tersangkut
+    if (preset === 'broadcast' || mergedReplyRatio.enabled === false) {
+      ab.replyRatio.resetCooldown();
+    }
+
+    return this.getAntiBanStatus(sessionId);
+  }
+
+  resetReplyRatioCooldown(sessionId: string, jid?: string) {
+    const ab = this.getAntiBan(sessionId);
+    ab.replyRatio.resetCooldown(jid);
+    return ab.replyRatio.getStats();
   }
 
   // Map untuk melacak kegagalan beruntun (Circuit Breaker)

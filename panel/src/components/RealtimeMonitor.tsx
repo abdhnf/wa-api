@@ -3,10 +3,10 @@ import {
   Activity, ShieldAlert, Zap, Pause, Play, RefreshCw,
   CheckCircle2, CheckCheck, Clock, AlertTriangle, Send, Sliders, Loader2,
   FileText, Image as ImageIcon, MapPin, Users,
-  ArrowUpRight, ShieldCheck, UserCheck, Radio, Sparkles
+  ArrowUpRight, ShieldCheck, UserCheck, Radio, Sparkles, Settings2, HelpCircle, ChevronDown, ChevronUp
 } from 'lucide-react';
 import { type QueueItem, type Session, EMPTY_SESSIONS, EMPTY_QUEUE } from '../dummyData';
-import { apiGetSessions, apiGetSessionMessages, apiSendBulk, apiGetAntiBan, apiGetQueueStatus, apiPauseQueue, apiResumeQueue } from '../api';
+import { apiGetSessions, apiGetSessionMessages, apiSendBulk, apiGetAntiBan, apiUpdateAntiBan, apiResetReplyRatioCooldown, apiRetryMessage, apiGetQueueStatus, apiPauseQueue, apiResumeQueue } from '../api';
 import { Toast } from './Toast';
 import { AutoRotateSettings } from './AutoRotateSettings';
 
@@ -33,16 +33,22 @@ export const RealtimeMonitor: React.FC = () => {
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
 
-  // Anti-ban runtime config state (baca dari backend nanti)
-  const [config] = useState({
-    preset: 'moderate',
+  // State Preset & Konfigurasi Anti-Ban Dinamis
+  const [activePreset, setActivePreset] = useState<string>('balanced');
+  const [customForm, setCustomForm] = useState({
     minDelaySec: 1.5,
-    maxDelaySec: 3.5,
-    warmupActive: true,
-    adaptiveThrottle: true,
-    groupGuard: true,
-    autoPauseOnFailure: true,
+    maxDelaySec: 5.0,
+    maxPerMinute: 8,
+    maxPerHour: 200,
+    maxIdenticalMessages: 3,
+    replyRatioEnabled: true,
+    minRatioPercent: 10,
+    minMessagesBeforeEnforce: 5,
+    cooldownHours: 24,
   });
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [savingAntiBan, setSavingAntiBan] = useState(false);
+  const [resettingCooldown, setResettingCooldown] = useState(false);
 
   const selectedSession = sessions.find(s => s.id === selectedSessionId) || sessions[0];
 
@@ -101,7 +107,25 @@ export const RealtimeMonitor: React.FC = () => {
       // Ambil status anti-ban aktual session
       try {
         const ab = await apiGetAntiBan(selectedSessionId);
-        if (ab?.antiBan) setAntiBanData(ab.antiBan);
+        if (ab?.antiBan) {
+          setAntiBanData(ab.antiBan);
+          if (ab.antiBan.preset) setActivePreset(ab.antiBan.preset);
+          if (ab.antiBan.currentConfig) {
+            const rl = ab.antiBan.currentConfig.rateLimiter || {};
+            const rr = ab.antiBan.currentConfig.replyRatio || {};
+            setCustomForm({
+              minDelaySec: (rl.minDelayMs || 1500) / 1000,
+              maxDelaySec: (rl.maxDelayMs || 5000) / 1000,
+              maxPerMinute: rl.maxPerMinute || 8,
+              maxPerHour: rl.maxPerHour || 200,
+              maxIdenticalMessages: rl.maxIdenticalMessages || 3,
+              replyRatioEnabled: rr.enabled !== false,
+              minRatioPercent: Math.round((rr.minRatio ?? 0.1) * 100),
+              minMessagesBeforeEnforce: rr.minMessagesBeforeEnforce ?? 5,
+              cooldownHours: rr.cooldownHoursOnViolation ?? 24,
+            });
+          }
+        }
       } catch {}
 
       const msgs = await apiGetSessionMessages(selectedSessionId);
@@ -156,6 +180,95 @@ export const RealtimeMonitor: React.FC = () => {
       showToast(err.message || 'Gagal mengubah status antrean', 'error');
     } finally {
       setPausingQueue(false);
+    }
+  };
+
+  const handleSelectPreset = async (presetId: string) => {
+    if (!selectedSessionId) return;
+    setActivePreset(presetId);
+    if (presetId === 'custom') {
+      setShowConfigModal(true);
+      return;
+    }
+    setSavingAntiBan(true);
+    try {
+      const res = await apiUpdateAntiBan(selectedSessionId, { preset: presetId });
+      if (res?.antiBan) setAntiBanData(res.antiBan);
+      showToast(`Preset berhasil diubah ke: ${presetId.toUpperCase()}`);
+    } catch (err: any) {
+      showToast(`Gagal ubah preset: ${err.message}`, 'error');
+    } finally {
+      setSavingAntiBan(false);
+    }
+  };
+
+  const handleSaveCustomConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSessionId) return;
+    setSavingAntiBan(true);
+    try {
+      const payload = {
+        preset: 'custom',
+        config: {
+          rateLimiter: {
+            minDelayMs: Math.round(Number(customForm.minDelaySec) * 1000),
+            maxDelayMs: Math.round(Number(customForm.maxDelaySec) * 1000),
+            maxPerMinute: Number(customForm.maxPerMinute),
+            maxPerHour: Number(customForm.maxPerHour),
+            maxIdenticalMessages: Number(customForm.maxIdenticalMessages),
+          },
+          replyRatio: {
+            enabled: Boolean(customForm.replyRatioEnabled),
+            minRatio: Number(customForm.minRatioPercent) / 100,
+            minMessagesBeforeEnforce: Number(customForm.minMessagesBeforeEnforce),
+            cooldownHoursOnViolation: Number(customForm.cooldownHours),
+          },
+        },
+      };
+      const res = await apiUpdateAntiBan(selectedSessionId, payload);
+      if (res?.antiBan) {
+        setAntiBanData(res.antiBan);
+        setActivePreset('custom');
+      }
+      setShowConfigModal(false);
+      showToast('Parameter kustom anti-ban berhasil disimpan!');
+    } catch (err: any) {
+      showToast(`Gagal simpan konfigurasi: ${err.message}`, 'error');
+    } finally {
+      setSavingAntiBan(false);
+    }
+  };
+
+  const handleResetCooldown = async () => {
+    if (!selectedSessionId) return;
+    setResettingCooldown(true);
+    try {
+      await apiResetReplyRatioCooldown(selectedSessionId);
+      showToast('Seluruh cooldown Reply Ratio berhasil di-reset!');
+      fetchQueue();
+    } catch (err: any) {
+      showToast(`Gagal reset cooldown: ${err.message}`, 'error');
+    } finally {
+      setResettingCooldown(false);
+    }
+  };
+
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+
+  const handleRetryMessage = async (messageId: string) => {
+    setRetryingIds(prev => new Set(prev).add(messageId));
+    try {
+      await apiRetryMessage(messageId);
+      showToast('Pesan berhasil dimasukkan kembali ke antrean!');
+      fetchQueue();
+    } catch (err: any) {
+      showToast(`Gagal retry pesan: ${err.message}`, 'error');
+    } finally {
+      setRetryingIds(prev => {
+        const next = new Set(prev);
+        next.delete(messageId);
+        return next;
+      });
     }
   };
 
@@ -411,46 +524,129 @@ export const RealtimeMonitor: React.FC = () => {
       </div>
 
       {/* Anti-Ban Safety Parameters Drawer/Card */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-2">
-            <Sliders size={14} className="text-emerald-400" />
-            Parameter Anti-Ban Engine (baileys-antiban)
-          </h3>
-          <span className="text-[11px] bg-emerald-950 text-emerald-400 border border-emerald-800/40 px-2 py-0.5 rounded font-mono">
-            Preset: {config.preset}
-          </span>
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-gray-800">
+          <div>
+            <h3 className="text-xs font-bold text-gray-200 uppercase tracking-wider flex items-center gap-2">
+              <Sliders size={14} className="text-emerald-400" />
+              Parameter Anti-Ban Engine (baileys-antiban)
+            </h3>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              8 layer proteksi akun WhatsApp dengan isolasi risiko, reply ratio guard, dan human-like pacing.
+            </p>
+          </div>
+
+          {/* Preset Selector & Custom Button */}
+          <div className="flex items-center flex-wrap gap-2">
+            <span className="text-[11px] text-gray-400 font-medium">Preset:</span>
+            <div className="inline-flex rounded-lg bg-gray-950 p-1 border border-gray-800 text-xs">
+              <button
+                type="button"
+                disabled={savingAntiBan || !selectedSessionId}
+                onClick={() => handleSelectPreset('strict')}
+                className={`px-2.5 py-1 rounded-md font-medium transition ${
+                  activePreset === 'strict'
+                    ? 'bg-purple-900/60 text-purple-300 border border-purple-700/60 shadow-sm'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+                title="Keamanan Maksimum: Delay 3-8s, max 5/min, Reply Ratio 10% (nomor baru)"
+              >
+                Strict
+              </button>
+              <button
+                type="button"
+                disabled={savingAntiBan || !selectedSessionId}
+                onClick={() => handleSelectPreset('balanced')}
+                className={`px-2.5 py-1 rounded-md font-medium transition ${
+                  activePreset === 'balanced'
+                    ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700/60 shadow-sm'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+                title="Standar CRM Interaktif: Delay 1.5-5s, max 8/min, Reply Ratio 10%"
+              >
+                Balanced
+              </button>
+              <button
+                type="button"
+                disabled={savingAntiBan || !selectedSessionId}
+                onClick={() => handleSelectPreset('broadcast')}
+                className={`px-2.5 py-1 rounded-md font-medium transition ${
+                  activePreset === 'broadcast'
+                    ? 'bg-blue-900/60 text-blue-300 border border-blue-700/60 shadow-sm'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+                title="Blast / Broadcast Notifikasi: Delay 2-5s, Reply Ratio Nonaktif (tidak kena cooldown)"
+              >
+                Broadcast
+              </button>
+              <button
+                type="button"
+                disabled={savingAntiBan || !selectedSessionId}
+                onClick={() => handleSelectPreset('custom')}
+                className={`px-2.5 py-1 rounded-md font-medium transition flex items-center gap-1 ${
+                  activePreset === 'custom'
+                    ? 'bg-amber-900/60 text-amber-300 border border-amber-700/60 shadow-sm'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+                title="Kustomisasi manual seluruh parameter pacing & proteksi"
+              >
+                <Settings2 size={12} />
+                Custom
+              </button>
+            </div>
+
+            {antiBanData?.replyRatio?.contactsOnCooldown > 0 && (
+              <button
+                type="button"
+                onClick={handleResetCooldown}
+                disabled={resettingCooldown || !selectedSessionId}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 transition flex items-center gap-1"
+                title="Buka blokir cooldown 24h untuk semua nomor yang tersangkut reply ratio"
+              >
+                {resettingCooldown ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                Reset {antiBanData.replyRatio.contactsOnCooldown} Cooldown
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
           {/* 1. WarmUp */}
-          <div className="p-3 bg-gray-950 border border-gray-800 rounded-xl space-y-1">
+          <div className="p-3 bg-gray-950 border border-gray-800 rounded-xl space-y-1 group relative">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-[11px]">7-Day WarmUp</span>
+              <span className="text-gray-400 text-[11px] font-medium flex items-center gap-1">
+                7-Day WarmUp
+              </span>
               <span className="text-[10px] text-emerald-400 font-mono">Layer 1</span>
             </div>
             <div className="font-mono text-emerald-400 font-semibold text-sm">
               {antiBanData?.warmup ? `Hari ke-${antiBanData.warmup.day}/7 (${antiBanData.warmup.todaySent}/${antiBanData.warmup.todayLimit})` : 'Memuat...'}
             </div>
-            <p className="text-[10px] text-gray-500">Kuota bertahap eksponensial ~1.8x/hari mencegah flag nomor baru.</p>
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              Membatasi volume kirim secara eksponensial di 7 hari awal agar nomor baru tidak langsung ditandai sebagai bot spammer.
+            </p>
           </div>
 
-          {/* 2. Rate Limiter */}
+          {/* 2. Rate Limiter & Jitter */}
           <div className="p-3 bg-gray-950 border border-gray-800 rounded-xl space-y-1">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-[11px]">Rate Limiter</span>
+              <span className="text-gray-400 text-[11px] font-medium">Rate Limiter & Jitter</span>
               <span className="text-[10px] text-emerald-400 font-mono">Layer 2</span>
             </div>
             <div className="text-emerald-400 font-semibold font-mono text-sm">
-              {antiBanData?.rateLimiter ? `${antiBanData.rateLimiter.lastMinute}/8 mnt • ${antiBanData.rateLimiter.lastHour}/200 jam` : 'Memuat...'}
+              {antiBanData?.rateLimiter
+                ? `${antiBanData.rateLimiter.lastMinute}/${antiBanData?.currentConfig?.rateLimiter?.maxPerMinute || 8} mnt • ${antiBanData.rateLimiter.lastHour}/${antiBanData?.currentConfig?.rateLimiter?.maxPerHour || 200} jam`
+                : 'Memuat...'}
             </div>
-            <p className="text-[10px] text-gray-500">Sliding window per m/h/d + blokir pesan identik berulang.</p>
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              Pacing Gaussian jitter antar-pesan ({((antiBanData?.currentConfig?.rateLimiter?.minDelayMs || 1500) / 1000).toFixed(1)}s - {((antiBanData?.currentConfig?.rateLimiter?.maxDelayMs || 5000) / 1000).toFixed(1)}s) serta blokir pesan identik berturut-turut.
+            </p>
           </div>
 
           {/* 3. Reconnect Throttle */}
           <div className="p-3 bg-gray-950 border border-gray-800 rounded-xl space-y-1">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-[11px]">Reconnect Throttle</span>
+              <span className="text-gray-400 text-[11px] font-medium">Reconnect Throttle</span>
               <span className="text-[10px] text-cyan-400 font-mono">Layer 3</span>
             </div>
             <div className="text-cyan-400 font-semibold font-mono text-sm">
@@ -458,13 +654,15 @@ export const RealtimeMonitor: React.FC = () => {
                 ? `${Math.round(antiBanData.reconnectMultiplier * 100)}% kecepatan`
                 : '100% (Stabil)'}
             </div>
-            <p className="text-[10px] text-gray-500">Ramping 10%→100% pasca reconnect (cegah lonjakan bot).</p>
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              Memperlambat laju kirim menjadi 10% sesaat setelah koneksi pulih, lalu bertahap naik ke 100% guna menghindari kecurigaan lonjakan bot.
+            </p>
           </div>
 
           {/* 4. Circadian Rhythm */}
           <div className="p-3 bg-gray-950 border border-gray-800 rounded-xl space-y-1">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-[11px]">Circadian Rhythm</span>
+              <span className="text-gray-400 text-[11px] font-medium">Circadian Rhythm</span>
               <span className="text-[10px] text-cyan-400 font-mono">Layer 4</span>
             </div>
             <div className="text-cyan-400 font-semibold font-mono text-sm">
@@ -472,25 +670,29 @@ export const RealtimeMonitor: React.FC = () => {
                 ? `${antiBanData.circadianMultiplier.toFixed(2)}x kecepatan`
                 : '1.0x normal'}
             </div>
-            <p className="text-[10px] text-gray-500">Malam 4-6x lebih santai, siang normal, meniru jam tidur manusia.</p>
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              Meniru siklus biologis manusia. Jam malam (23:00 - 05:00) otomatis diperlambat 4x - 6x dibanding jam kerja siang hari.
+            </p>
           </div>
 
-          {/* 5. Timelock Guard (463) */}
+          {/* 5. Timelock Guard */}
           <div className="p-3 bg-gray-950 border border-gray-800 rounded-xl space-y-1">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-[11px]">Timelock Guard</span>
+              <span className="text-gray-400 text-[11px] font-medium">Timelock Guard</span>
               <span className="text-[10px] text-amber-400 font-mono">Layer 5</span>
             </div>
             <div className={`font-semibold font-mono text-sm ${antiBanData?.timelock?.isActive ? 'text-amber-400' : 'text-emerald-400'}`}>
               {antiBanData?.timelock?.isActive ? 'TIMELOCKED (Blok Baru)' : 'Normal (Bebas 463)'}
             </div>
-            <p className="text-[10px] text-gray-500">Isolasi kontak baru saat error 463; izin kontak lama tetap jalan.</p>
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              Perlindungan error 463 dari server WhatsApp. Kontak baru dibekukan sementara, kontak lama tetap diizinkan berkirim pesan.
+            </p>
           </div>
 
           {/* 6. Ban Recovery Orchestrator */}
           <div className="p-3 bg-gray-950 border border-gray-800 rounded-xl space-y-1">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-[11px]">Recovery Orchestrator</span>
+              <span className="text-gray-400 text-[11px] font-medium">Recovery Orchestrator</span>
               <span className="text-[10px] text-purple-400 font-mono">Layer 6</span>
             </div>
             <div className={`font-semibold font-mono text-sm ${antiBanData?.recovery?.currentPhase === 'recovering' ? 'text-amber-400' : 'text-emerald-400'}`}>
@@ -498,27 +700,35 @@ export const RealtimeMonitor: React.FC = () => {
                 ? `Recovery: ${antiBanData.recovery.banType || 'Active'}`
                 : 'Fase: Normal'}
             </div>
-            <p className="text-[10px] text-gray-500">Pemulihan berjenjang pasca-ban (pause 24h → 10% → +15%/minggu).</p>
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              Protokol pemulihan bertahap pasca akun dibuka dari blokir (jeda istirahat 24 jam → mulai 10% kuota → naik +15% per pekan).
+            </p>
           </div>
 
           {/* 7. Reply Ratio Guard */}
           <div className="p-3 bg-gray-950 border border-gray-800 rounded-xl space-y-1">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-[11px]">Reply Ratio Guard</span>
+              <span className="text-gray-400 text-[11px] font-medium">Reply Ratio Guard</span>
               <span className="text-[10px] text-indigo-400 font-mono">Layer 7</span>
             </div>
-            <div className="text-indigo-400 font-semibold font-mono text-sm">
-              {antiBanData?.replyRatio
-                ? `${Math.round(antiBanData.replyRatio.globalRatio * 100)}% (${antiBanData.replyRatio.globalReceived}/${antiBanData.replyRatio.globalSent} msg)`
-                : '0% (0/0)'}
+            <div className="text-indigo-400 font-semibold font-mono text-sm flex items-center justify-between">
+              <span>
+                {antiBanData?.currentConfig?.replyRatio?.enabled === false
+                  ? 'NONAKTIF (Mode Broadcast)'
+                  : antiBanData?.replyRatio
+                  ? `${Math.round(antiBanData.replyRatio.globalRatio * 100)}% (${antiBanData.replyRatio.globalReceived}/${antiBanData.replyRatio.globalSent} msg)`
+                  : '0% (0/0)'}
+              </span>
             </div>
-            <p className="text-[10px] text-gray-500">Cooldown 24h jika rasio balasan kontak &lt;10% setelah 5 outbound.</p>
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              Mencegah pola spam satu arah. Jika kontak tidak pernah membalas setelah {antiBanData?.currentConfig?.replyRatio?.minMessagesBeforeEnforce || 5} pesan, pengiriman ke nomor tersebut di-cooldown.
+            </p>
           </div>
 
           {/* 8. Contact Graph Warmer */}
           <div className="p-3 bg-gray-950 border border-gray-800 rounded-xl space-y-1">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-[11px]">Contact Graph</span>
+              <span className="text-gray-400 text-[11px] font-medium">Contact Graph</span>
               <span className="text-[10px] text-pink-400 font-mono">Layer 8</span>
             </div>
             <div className="text-pink-400 font-semibold font-mono text-sm">
@@ -526,7 +736,9 @@ export const RealtimeMonitor: React.FC = () => {
                 ? `${antiBanData.contactGraph.knownContacts} known • ${antiBanData.contactGraph.pendingHandshakes} pending`
                 : 'Ready (Opt-in)'}
             </div>
-            <p className="text-[10px] text-gray-500">Social graph warmup: lurk grup 12h, cap 5 nomor baru/hari.</p>
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              Pemanasan grafik jejaring sosial WhatsApp: interaksi bertahap di grup sebelum mengirim pesan langsung ke anggota yang belum saling simpan kontak.
+            </p>
           </div>
         </div>
       </div>
@@ -602,28 +814,49 @@ export const RealtimeMonitor: React.FC = () => {
                   <th className="px-4 py-3">Pesan</th>
                   <th className="px-4 py-3">Pacing Delay</th>
                   <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3 text-right">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/70">
-                {queue.map(item => (
-                  <tr key={item.id} className="hover:bg-gray-800/40 transition">
-                    <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{item.timestamp}</td>
-                    <td className="px-4 py-3 font-mono text-gray-200 whitespace-nowrap">+{item.recipient}</td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-950 border border-gray-800 text-[10px] text-gray-300 uppercase">
-                        {getModeIcon(item.mode)} {item.mode}
-                      </span>
-                      {item.isBulk && (
-                        <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-pink-950/60 border border-pink-800/50 text-[10px] text-pink-300">
-                          <Users size={10} /> Bulk
+                {queue.map(item => {
+                  const isFailed = item.status === 'failed' || item.status === 'invalid_number';
+                  const isRetrying = retryingIds.has(item.id);
+                  return (
+                    <tr key={item.id} className="hover:bg-gray-800/40 transition">
+                      <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{item.timestamp}</td>
+                      <td className="px-4 py-3 font-mono text-gray-200 whitespace-nowrap">+{item.recipient}</td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-950 border border-gray-800 text-[10px] text-gray-300 uppercase">
+                          {getModeIcon(item.mode)} {item.mode}
                         </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 max-w-[220px] truncate">{item.text}</td>
-                    <td className="px-4 py-3 font-mono text-gray-500">{(item.jitterDelayMs / 1000).toFixed(1)}s</td>
-                    <td className="px-4 py-3">{getStatusBadge(item.status)}</td>
-                  </tr>
-                ))}
+                        {item.isBulk && (
+                          <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-pink-950/60 border border-pink-800/50 text-[10px] text-pink-300">
+                            <Users size={10} /> Bulk
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 max-w-[220px] truncate">{item.text}</td>
+                      <td className="px-4 py-3 font-mono text-gray-500">{(item.jitterDelayMs / 1000).toFixed(1)}s</td>
+                      <td className="px-4 py-3">{getStatusBadge(item.status)}</td>
+                      <td className="px-4 py-3 text-right">
+                        {isFailed ? (
+                          <button
+                            type="button"
+                            disabled={isRetrying}
+                            onClick={() => handleRetryMessage(item.id)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-950/70 hover:bg-amber-900 border border-amber-800/70 text-amber-300 text-[11px] font-medium transition cursor-pointer disabled:opacity-50"
+                            title="Kirim ulang pesan ini ke antrean"
+                          >
+                            {isRetrying ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                            <span>Retry</span>
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-gray-600">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -703,6 +936,168 @@ export const RealtimeMonitor: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Modal Kustomisasi Parameter Anti-Ban */}
+      {showConfigModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-xl p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+              <div className="flex items-center gap-2">
+                <Settings2 size={18} className="text-amber-400" />
+                <h3 className="font-bold text-gray-200 text-sm">
+                  Kustomisasi Parameter Anti-Ban (Sesi: {selectedSession?.name})
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowConfigModal(false)}
+                className="text-gray-400 hover:text-white transition text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCustomConfig} className="space-y-4 text-xs">
+              {/* Seksi Pacing Rate Limiter */}
+              <div className="bg-gray-950 border border-gray-800/80 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+                  <span className="font-semibold text-gray-200">Layer 2: Pacing & Rate Limiter</span>
+                  <span className="text-[10px] text-emerald-400 font-mono">Pacing Mesin</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-gray-400 mb-1">Min Delay (detik)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0.5"
+                      max="60"
+                      value={customForm.minDelaySec}
+                      onChange={(e) => setCustomForm({ ...customForm, minDelaySec: parseFloat(e.target.value) || 1 })}
+                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200 font-mono focus:border-emerald-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-gray-500">Jeda acak terendah antar-pesan</span>
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 mb-1">Max Delay (detik)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="1"
+                      max="120"
+                      value={customForm.maxDelaySec}
+                      onChange={(e) => setCustomForm({ ...customForm, maxDelaySec: parseFloat(e.target.value) || 2 })}
+                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200 font-mono focus:border-emerald-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-gray-500">Jeda acak tertinggi antar-pesan</span>
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 mb-1">Max Pesan / Menit</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="60"
+                      value={customForm.maxPerMinute}
+                      onChange={(e) => setCustomForm({ ...customForm, maxPerMinute: parseInt(e.target.value, 10) || 5 })}
+                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200 font-mono focus:border-emerald-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-gray-500">Batas frekuensi dalam 60 detik</span>
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 mb-1">Max Pesan / Jam</label>
+                    <input
+                      type="number"
+                      min="10"
+                      max="1000"
+                      value={customForm.maxPerHour}
+                      onChange={(e) => setCustomForm({ ...customForm, maxPerHour: parseInt(e.target.value, 10) || 100 })}
+                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200 font-mono focus:border-emerald-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-gray-500">Batas kuota sliding window 1 jam</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Seksi Reply Ratio Guard */}
+              <div className="bg-gray-950 border border-gray-800/80 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+                  <span className="font-semibold text-gray-200">Layer 7: Reply Ratio Guard</span>
+                  <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+                    <input
+                      type="checkbox"
+                      checked={customForm.replyRatioEnabled}
+                      onChange={(e) => setCustomForm({ ...customForm, replyRatioEnabled: e.target.checked })}
+                      className="rounded border-gray-700 text-emerald-500 focus:ring-0"
+                    />
+                    <span className={customForm.replyRatioEnabled ? 'text-emerald-400' : 'text-gray-500'}>
+                      {customForm.replyRatioEnabled ? 'Aktif' : 'Nonaktif (Mode Blast)'}
+                    </span>
+                  </label>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-gray-400 mb-1">Min Pesan Awal</label>
+                    <input
+                      type="number"
+                      disabled={!customForm.replyRatioEnabled}
+                      min="1"
+                      max="50"
+                      value={customForm.minMessagesBeforeEnforce}
+                      onChange={(e) => setCustomForm({ ...customForm, minMessagesBeforeEnforce: parseInt(e.target.value, 10) || 5 })}
+                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200 font-mono focus:border-emerald-500 focus:outline-none disabled:opacity-40"
+                    />
+                    <span className="text-[10px] text-gray-500">Pesan terkirim sebelum rasio dicek</span>
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 mb-1">Min Rasio Balasan (%)</label>
+                    <input
+                      type="number"
+                      disabled={!customForm.replyRatioEnabled}
+                      min="0"
+                      max="100"
+                      value={customForm.minRatioPercent}
+                      onChange={(e) => setCustomForm({ ...customForm, minRatioPercent: parseInt(e.target.value, 10) || 0 })}
+                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200 font-mono focus:border-emerald-500 focus:outline-none disabled:opacity-40"
+                    />
+                    <span className="text-[10px] text-gray-500">Standar 10% (1 balasan per 10 kirim)</span>
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 mb-1">Durasi Cooldown (jam)</label>
+                    <input
+                      type="number"
+                      disabled={!customForm.replyRatioEnabled}
+                      min="1"
+                      max="72"
+                      value={customForm.cooldownHours}
+                      onChange={(e) => setCustomForm({ ...customForm, cooldownHours: parseInt(e.target.value, 10) || 24 })}
+                      className="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200 font-mono focus:border-emerald-500 focus:outline-none disabled:opacity-40"
+                    />
+                    <span className="text-[10px] text-gray-500">Lama penghentian jika melanggar</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowConfigModal(false)}
+                  className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium transition"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingAntiBan}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition flex items-center gap-1.5"
+                >
+                  {savingAntiBan ? <Loader2 size={13} className="animate-spin" /> : null}
+                  Terapkan Parameter Kustom
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Toast auto-close */}
       <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
