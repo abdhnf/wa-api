@@ -635,6 +635,39 @@ app.post('/api/v1/sessions/:id/queue/resume', { preHandler: requireAuth }, async
   return reply.send(res);
 });
 
+app.post('/api/v1/sessions/:id/queue/clear', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const body = (req.body || {}) as { reason?: string; batchId?: string };
+  const res = manager.clearQueue(id, body.reason || 'Dibatalkan oleh pengguna', body.batchId);
+  return reply.send(res);
+});
+
+// ============ Batch Queue Controls (Jeda, Lanjut, dan Batalkan Per Kampanye/Batch) ============
+app.get('/api/v1/batches/:batchId/status', { preHandler: requireAuth }, async (req, reply) => {
+  const { batchId } = req.params as { batchId: string };
+  return reply.send(manager.isBatchPaused(batchId));
+});
+
+app.post('/api/v1/batches/:batchId/pause', { preHandler: requireAuth }, async (req, reply) => {
+  const { batchId } = req.params as { batchId: string };
+  const body = (req.body || {}) as { reason?: string };
+  const res = manager.pauseBatch(batchId, body.reason || 'Kampanye dijeda oleh pengguna');
+  return reply.send(res);
+});
+
+app.post('/api/v1/batches/:batchId/resume', { preHandler: requireAuth }, async (req, reply) => {
+  const { batchId } = req.params as { batchId: string };
+  const res = manager.resumeBatch(batchId);
+  return reply.send(res);
+});
+
+app.post('/api/v1/batches/:batchId/clear', { preHandler: requireAuth }, async (req, reply) => {
+  const { batchId } = req.params as { batchId: string };
+  const body = (req.body || {}) as { reason?: string };
+  const res = manager.clearBatch(batchId, body.reason || 'Kampanye dibatalkan oleh pengguna');
+  return reply.send(res);
+});
+
 // ============ Messages (6 endpoints) — JWT panel ATAU X-API-Key ============
 app.post('/api/v1/messages/send', { preHandler: requireAuth }, async (req, reply) => {
   const parsed = parseBody(sendTextSchema, req.body);

@@ -27,6 +27,7 @@ export class SessionManager {
   private vipQueues = new Map<string, OutboundMessage[]>();
   private normalQueues = new Map<string, OutboundMessage[]>();
   private pausedSessions = new Map<string, { isPaused: boolean; reason?: string }>();
+  private pausedBatches = new Map<string, { isPaused: boolean; reason?: string }>();
   private processing = new Set<string>();
   private antiban = new Map<string, {
     rateLimiter: RateLimiter;
@@ -214,6 +215,33 @@ export class SessionManager {
     return { success: true, status: this.getQueueStatus(sessionId) };
   }
 
+  /** Pause antrean per batch/kampanye tertentu (tidak mempengaruhi batch lain di sesi yang sama) */
+  pauseBatch(batchId: string, reason = 'Kampanye dijeda oleh pengguna'): { success: boolean; batchId: string; isPaused: boolean; reason?: string } {
+    this.pausedBatches.set(batchId, { isPaused: true, reason });
+    console.log(`[batch:${batchId}] ⏸️ Antrean batch di-pause: ${reason}`);
+    return { success: true, batchId, isPaused: true, reason };
+  }
+
+  /** Resume antrean per batch/kampanye tertentu */
+  resumeBatch(batchId: string): { success: boolean; batchId: string; isPaused: boolean } {
+    this.pausedBatches.delete(batchId);
+    console.log(`[batch:${batchId}] ▶️ Antrean batch di-resume`);
+    // Picu processQueue pada seluruh sesi yang menyimpan pesan dari batch ini
+    for (const [sid, queue] of this.normalQueues.entries()) {
+      if (queue.some((m) => m.batchId === batchId)) {
+        void this.processQueue(sid);
+      }
+    }
+    return { success: true, batchId, isPaused: false };
+  }
+
+  /** Cek apakah sebuah batch sedang dijeda */
+  isBatchPaused(batchId?: string): { isPaused: boolean; reason?: string } {
+    if (!batchId) return { isPaused: false };
+    const p = this.pausedBatches.get(batchId);
+    return { isPaused: Boolean(p?.isPaused), reason: p?.reason };
+  }
+
   /** Cek status antrean per sesi */
   getQueueStatus(sessionId: string): QueueSessionStatus {
     const pauseInfo = this.pausedSessions.get(sessionId);
@@ -226,6 +254,57 @@ export class SessionManager {
       pendingCount,
       vipPendingCount,
     };
+  }
+
+  /** Bersihkan / batalkan antrean normal (blast) per sesi atau spesifik per batchId */
+  clearQueue(sessionId: string, reason = 'Dibatalkan oleh pengguna', targetBatchId?: string): { success: boolean; clearedCount: number; batchId?: string } {
+    const queue = this.normalQueues.get(sessionId) || [];
+    if (targetBatchId) {
+      // Hanya batalkan pesan yang cocok dengan batchId ini
+      const remaining: OutboundMessage[] = [];
+      let cleared = 0;
+      for (const msg of queue) {
+        if (msg.batchId === targetBatchId) {
+          updateMessageStatus(msg.id, 'failed', reason);
+          cleared++;
+        } else {
+          remaining.push(msg);
+        }
+      }
+      this.normalQueues.set(sessionId, remaining);
+      this.pausedBatches.delete(targetBatchId);
+      console.log(`[session:${sessionId}][batch:${targetBatchId}] 🛑 Antrean batch dibersihkan (${cleared} pesan dibatalkan, sisa ${remaining.length} pesan di sesi)`);
+      return { success: true, clearedCount: cleared, batchId: targetBatchId };
+    }
+
+    const count = queue.length;
+    for (const msg of queue) {
+      updateMessageStatus(msg.id, 'failed', reason);
+    }
+    this.normalQueues.set(sessionId, []);
+    this.pausedSessions.delete(sessionId);
+    console.log(`[session:${sessionId}] 🛑 Seluruh antrean blast sesi dibersihkan (${count} pesan dibatalkan)`);
+    return { success: true, clearedCount: count };
+  }
+
+  /** Bersihkan / batalkan antrean batch lintas semua sesi yang memprosesnya */
+  clearBatch(batchId: string, reason = 'Kampanye dibatalkan oleh pengguna'): { success: boolean; batchId: string; clearedCount: number } {
+    let totalCleared = 0;
+    for (const [sid, queue] of this.normalQueues.entries()) {
+      const remaining: OutboundMessage[] = [];
+      for (const msg of queue) {
+        if (msg.batchId === batchId) {
+          updateMessageStatus(msg.id, 'failed', reason);
+          totalCleared++;
+        } else {
+          remaining.push(msg);
+        }
+      }
+      this.normalQueues.set(sid, remaining);
+    }
+    this.pausedBatches.delete(batchId);
+    console.log(`[batch:${batchId}] 🛑 Antrean batch dibatalkan lintas seluruh sesi (${totalCleared} pesan dibatalkan)`);
+    return { success: true, batchId, clearedCount: totalCleared };
   }
 
   /** Daftarkan kontak yang pernah chat (dari engine/listSessions) */
@@ -525,14 +604,30 @@ export class SessionManager {
             break; // Kedua antrean kosong, selesai!
           }
 
-          // Cek apakah antrean normal sedang di-pause
+          // Cek apakah antrean normal sedang di-pause per sesi
           const pauseInfo = this.pausedSessions.get(sessionId);
           if (pauseInfo?.isPaused) {
             console.log(`[session:${sessionId}] ⏸️ Antrean blast sedang dijeda (${pauseInfo.reason}). Menunggu resume.`);
             break; // Keluar loop, pesan tetap tersimpan di normalQueue
           }
 
-          msg = normalQueue.shift()!;
+          // Cari pesan pertama yang batch-nya TIDAK sedang di-pause
+          let targetIdx = -1;
+          for (let i = 0; i < normalQueue.length; i++) {
+            const bId = normalQueue[i].batchId;
+            if (!bId || !this.pausedBatches.get(bId)?.isPaused) {
+              targetIdx = i;
+              break;
+            }
+          }
+
+          if (targetIdx === -1) {
+            // Semua pesan yang tersisa di antrean normal saat ini sedang dalam batch yang di-pause!
+            console.log(`[session:${sessionId}] ⏸️ Seluruh pesan tersisa di antrean (${normalQueue.length}) berasal dari batch yang sedang dijeda. Menunggu resume batch.`);
+            break;
+          }
+
+          msg = normalQueue.splice(targetIdx, 1)[0];
         }
 
         if (!msg) break;
