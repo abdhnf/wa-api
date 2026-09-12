@@ -735,12 +735,21 @@ export class ReplyRatioGuard {
     if (!record) return { allowed: true }; // kontak baru — izinkan dulu
 
     // Cek cooldown
-    if (record.cooledUntil && Date.now() < record.cooledUntil) {
-      const hoursLeft = Math.ceil((record.cooledUntil - Date.now()) / 3600000);
-      return {
-        allowed: false,
-        reason: `Reply ratio cooldown — ${record.sent} sent, ${record.received} received. Retry in ${hoursLeft}h`,
-      };
+    if (record.cooledUntil) {
+      if (Date.now() < record.cooledUntil) {
+        const hoursLeft = Math.ceil((record.cooledUntil - Date.now()) / 3600000);
+        return {
+          allowed: false,
+          reason: `Reply ratio cooldown — ${record.sent} sent, ${record.received} received. Retry in ${hoursLeft}h`,
+        };
+      } else {
+        // Masa cooldown telah selesai! Beri kesempatan (grace period) untuk kirim pesan lagi.
+        // Hapus cooledUntil dan turunkan counter sent di bawah threshold enforce agar tidak langsung loop cooldown.
+        delete record.cooledUntil;
+        record.sent = Math.max(0, this.config.minMessagesBeforeEnforce - 1);
+        this.contacts.set(jid, record);
+        return { allowed: true };
+      }
     }
 
     // Cek rasio kalau sudah kirim cukup banyak
@@ -813,16 +822,13 @@ export class ReplyRatioGuard {
 
   resetCooldown(jid?: string): void {
     if (jid) {
-      const record = this.contacts.get(jid);
-      if (record) {
-        delete record.cooledUntil;
-        this.contacts.set(jid, record);
-      }
+      // Hapus kontak agar statusnya bersih seperti kontak baru
+      this.contacts.delete(jid);
     } else {
+      // Jika reset global, hapus seluruh kontak yang terkena cooldown atau di atas batas enforce
       for (const [key, record] of this.contacts.entries()) {
-        if (record.cooledUntil) {
-          delete record.cooledUntil;
-          this.contacts.set(key, record);
+        if (record.cooledUntil || record.sent >= this.config.minMessagesBeforeEnforce) {
+          this.contacts.delete(key);
         }
       }
     }

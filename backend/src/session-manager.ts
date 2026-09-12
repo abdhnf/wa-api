@@ -560,6 +560,7 @@ export class SessionManager {
     // Jika preset broadcast atau dinonaktifkan, bersihkan cooldown lama yang tersangkut
     if (preset === 'broadcast' || mergedReplyRatio.enabled === false) {
       ab.replyRatio.resetCooldown();
+      this.persistAntiBan(sessionId);
     }
 
     return this.getAntiBanStatus(sessionId);
@@ -568,6 +569,7 @@ export class SessionManager {
   resetReplyRatioCooldown(sessionId: string, jid?: string) {
     const ab = this.getAntiBan(sessionId);
     ab.replyRatio.resetCooldown(jid);
+    this.persistAntiBan(sessionId);
     return ab.replyRatio.getStats();
   }
 
