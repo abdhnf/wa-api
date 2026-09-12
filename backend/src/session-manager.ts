@@ -235,11 +235,18 @@ export class SessionManager {
     return { success: true, batchId, isPaused: false };
   }
 
-  /** Cek apakah sebuah batch sedang dijeda */
-  isBatchPaused(batchId?: string): { isPaused: boolean; reason?: string } {
-    if (!batchId) return { isPaused: false };
+  /** Cek apakah sebuah batch sedang dijeda dan berapa sisa antreannya */
+  isBatchPaused(batchId?: string): { isPaused: boolean; reason?: string; activeCount: number } {
+    if (!batchId) return { isPaused: false, activeCount: 0 };
     const p = this.pausedBatches.get(batchId);
-    return { isPaused: Boolean(p?.isPaused), reason: p?.reason };
+    let activeCount = 0;
+    for (const q of this.normalQueues.values()) {
+      activeCount += q.filter((m) => m.batchId === batchId).length;
+    }
+    for (const q of this.vipQueues.values()) {
+      activeCount += q.filter((m) => m.batchId === batchId).length;
+    }
+    return { isPaused: Boolean(p?.isPaused), reason: p?.reason, activeCount };
   }
 
   /** Cek status antrean per sesi */
