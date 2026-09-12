@@ -24,6 +24,12 @@ export interface SessionInfo {
   metrics: SessionMetrics;
   userId?: string;
   owner?: { id: string; name: string; email: string };
+  queue?: {
+    pendingCount: number;
+    priorityPendingCount: number;
+    isPaused: boolean;
+    estimatedWaitSeconds: number;
+  };
 }
 
 export type MessageMode = 'text' | 'media' | 'location';

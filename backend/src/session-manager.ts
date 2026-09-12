@@ -28,6 +28,7 @@ export class SessionManager {
   private normalQueues = new Map<string, OutboundMessage[]>();
   private pausedSessions = new Map<string, { isPaused: boolean; reason?: string }>();
   private pausedBatches = new Map<string, { isPaused: boolean; reason?: string }>();
+  private lastServedBatchPerSession = new Map<string, string>();
   private processing = new Set<string>();
   private antiban = new Map<string, {
     rateLimiter: RateLimiter;
@@ -621,20 +622,37 @@ export class SessionManager {
             break; // Keluar loop, pesan tetap tersimpan di normalQueue
           }
 
-          // Cari pesan pertama yang batch-nya TIDAK sedang di-pause
-          let targetIdx = -1;
+          // Fair-Queueing / Interleaving per-batch:
+          // Agar kampanye baru tidak tertahan berjam-jam di belakang kampanye besar yang sedang berjalan.
+          const candidateIndices: number[] = [];
           for (let i = 0; i < normalQueue.length; i++) {
             const bId = normalQueue[i].batchId;
             if (!bId || !this.pausedBatches.get(bId)?.isPaused) {
-              targetIdx = i;
-              break;
+              candidateIndices.push(i);
             }
           }
 
-          if (targetIdx === -1) {
+          if (candidateIndices.length === 0) {
             // Semua pesan yang tersisa di antrean normal saat ini sedang dalam batch yang di-pause!
             console.log(`[session:${sessionId}] ⏸️ Seluruh pesan tersisa di antrean (${normalQueue.length}) berasal dari batch yang sedang dijeda. Menunggu resume batch.`);
             break;
+          }
+
+          // Kumpulkan batchId unik dari pesan-pesan yang aktif
+          const activeBatches = Array.from(new Set(candidateIndices.map((i) => normalQueue[i].batchId || 'standalone')));
+          let targetIdx = candidateIndices[0];
+
+          if (activeBatches.length > 1) {
+            const lastBatch = this.lastServedBatchPerSession.get(sessionId);
+            const lastIdx = lastBatch ? activeBatches.indexOf(lastBatch) : -1;
+            const nextBatch = activeBatches[(lastIdx + 1) % activeBatches.length];
+            const foundIdx = candidateIndices.find((i) => (normalQueue[i].batchId || 'standalone') === nextBatch);
+            if (foundIdx !== undefined) {
+              targetIdx = foundIdx;
+              this.lastServedBatchPerSession.set(sessionId, nextBatch);
+            }
+          } else if (activeBatches.length === 1) {
+            this.lastServedBatchPerSession.set(sessionId, activeBatches[0]);
           }
 
           msg = normalQueue.splice(targetIdx, 1)[0];
@@ -796,7 +814,20 @@ export class SessionManager {
   async listSessions(filterUserId?: string): Promise<SessionInfo[]> {
     const sessions = await this.engine.listSessions();
     for (const s of sessions) upsertSession(s);
-    return dbListSessions(filterUserId);
+    const list = dbListSessions(filterUserId);
+    return list.map((s) => {
+      const q = this.getQueueStatus(s.id);
+      const estSeconds = Math.round(q.pendingCount * 3.5);
+      return {
+        ...s,
+        queue: {
+          pendingCount: q.pendingCount,
+          priorityPendingCount: q.priorityPendingCount,
+          isPaused: q.isPaused,
+          estimatedWaitSeconds: estSeconds,
+        },
+      };
+    });
   }
 
   async startPairing(id: string, name: string, phone: string, userId?: string) {
