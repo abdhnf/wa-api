@@ -245,6 +245,7 @@ export async function apiSendLocation(payload: {
   longitude: number;
   name?: string;
   address?: string;
+  priority?: 'high' | 'normal';
 }) {
   return request('/messages/send-location', {
     method: 'POST',

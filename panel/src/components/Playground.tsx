@@ -282,6 +282,7 @@ export const Playground: React.FC = () => {
           longitude: parseFloat(longitude),
           name: locName || undefined,
           address: locAddress || undefined,
+          priority,
         });
       } else if (mode === 'bulk') {
         let recipients: string[] = [];
@@ -902,6 +903,50 @@ export const Playground: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* Prioritas Pengiriman (Queue Priority) */}
+          <div className="pt-2 border-t border-gray-800/80">
+            <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
+              Prioritas Pengiriman (Queue Priority)
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setPriority('normal')}
+                className={`flex items-start gap-2.5 p-2.5 rounded-xl border text-left transition ${
+                  priority === 'normal'
+                    ? 'bg-emerald-950/40 border-emerald-500/60 text-emerald-300 ring-1 ring-emerald-500/30'
+                    : 'bg-gray-950 border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-300'
+                }`}
+              >
+                <div className={`p-1.5 rounded-lg shrink-0 ${priority === 'normal' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-900 text-gray-500'}`}>
+                  <Clock size={14} />
+                </div>
+                <div>
+                  <div className="text-xs font-semibold">Normal (Reguler)</div>
+                  <div className="text-[10px] text-gray-400 leading-tight mt-0.5">Antrean standar santai, aman anti-ban</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPriority('high')}
+                className={`flex items-start gap-2.5 p-2.5 rounded-xl border text-left transition ${
+                  priority === 'high'
+                    ? 'bg-amber-950/40 border-amber-500/60 text-amber-300 ring-1 ring-amber-500/30'
+                    : 'bg-gray-950 border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-300'
+                }`}
+              >
+                <div className={`p-1.5 rounded-lg shrink-0 ${priority === 'high' ? 'bg-amber-500/20 text-amber-400' : 'bg-gray-900 text-gray-500'}`}>
+                  <Zap size={14} />
+                </div>
+                <div>
+                  <div className="text-xs font-semibold">High (Prioritas)</div>
+                  <div className="text-[10px] text-gray-400 leading-tight mt-0.5">Langsung salip antrean (Urgent / OTP)</div>
+                </div>
+              </button>
+            </div>
+          </div>
 
           {/* Submit Button */}
           <button

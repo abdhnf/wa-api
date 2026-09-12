@@ -22,7 +22,7 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
   const [loading, setLoading] = useState(true);
   const [sendingBulk, setSendingBulk] = useState(false);
   const [antiBanData, setAntiBanData] = useState<any>(null);
-  const [queueStatus, setQueueStatus] = useState<{ isPaused: boolean; pauseReason?: string; pendingCount: number; vipPendingCount: number } | null>(null);
+  const [queueStatus, setQueueStatus] = useState<{ isPaused: boolean; pauseReason?: string; pendingCount: number; priorityPendingCount?: number; vipPendingCount?: number } | null>(null);
   const [pausingQueue, setPausingQueue] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

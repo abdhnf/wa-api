@@ -24,7 +24,7 @@ import type { WhatsAppEngine } from './engine/WhatsAppEngine.js';
  */
 export class SessionManager {
   private engine: WhatsAppEngine;
-  private vipQueues = new Map<string, OutboundMessage[]>();
+  private priorityQueues = new Map<string, OutboundMessage[]>();
   private normalQueues = new Map<string, OutboundMessage[]>();
   private pausedSessions = new Map<string, { isPaused: boolean; reason?: string }>();
   private pausedBatches = new Map<string, { isPaused: boolean; reason?: string }>();
@@ -138,7 +138,7 @@ export class SessionManager {
     };
     updateMessageStatus(messageId, 'pending', '', 0);
 
-    const q = refreshed.priority === 'high' ? this.vipQueues : this.normalQueues;
+    const q = refreshed.priority === 'high' ? this.priorityQueues : this.normalQueues;
     if (!q.has(refreshed.sessionId)) q.set(refreshed.sessionId, []);
     q.get(refreshed.sessionId)!.push(refreshed);
 
@@ -158,9 +158,9 @@ export class SessionManager {
     insertMessage(full);
 
     if (priority === 'high') {
-      if (!this.vipQueues.has(full.sessionId)) this.vipQueues.set(full.sessionId, []);
-      this.vipQueues.get(full.sessionId)!.push(full);
-      console.log(`[session:${full.sessionId}] 🚀 Pesan VIP (OTP) masuk ke Jalur Cepat: ${full.id}`);
+      if (!this.priorityQueues.has(full.sessionId)) this.priorityQueues.set(full.sessionId, []);
+      this.priorityQueues.get(full.sessionId)!.push(full);
+      console.log(`[session:${full.sessionId}] 🚀 Pesan Priority (High) masuk ke Antrean Prioritas: ${full.id}`);
     } else {
       if (!this.normalQueues.has(full.sessionId)) this.normalQueues.set(full.sessionId, []);
       this.normalQueues.get(full.sessionId)!.push(full);
@@ -186,8 +186,8 @@ export class SessionManager {
     for (const msg of pending) {
       sids.add(msg.sessionId);
       if (msg.priority === 'high') {
-        if (!this.vipQueues.has(msg.sessionId)) this.vipQueues.set(msg.sessionId, []);
-        this.vipQueues.get(msg.sessionId)!.push(msg);
+        if (!this.priorityQueues.has(msg.sessionId)) this.priorityQueues.set(msg.sessionId, []);
+        this.priorityQueues.get(msg.sessionId)!.push(msg);
       } else {
         if (!this.normalQueues.has(msg.sessionId)) this.normalQueues.set(msg.sessionId, []);
         this.normalQueues.get(msg.sessionId)!.push(msg);
@@ -243,7 +243,7 @@ export class SessionManager {
     for (const q of this.normalQueues.values()) {
       activeCount += q.filter((m) => m.batchId === batchId).length;
     }
-    for (const q of this.vipQueues.values()) {
+    for (const q of this.priorityQueues.values()) {
       activeCount += q.filter((m) => m.batchId === batchId).length;
     }
     return { isPaused: Boolean(p?.isPaused), reason: p?.reason, activeCount };
@@ -253,13 +253,14 @@ export class SessionManager {
   getQueueStatus(sessionId: string): QueueSessionStatus {
     const pauseInfo = this.pausedSessions.get(sessionId);
     const pendingCount = (this.normalQueues.get(sessionId) || []).length;
-    const vipPendingCount = (this.vipQueues.get(sessionId) || []).length;
+    const priorityPendingCount = (this.priorityQueues.get(sessionId) || []).length;
     return {
       sessionId,
       isPaused: Boolean(pauseInfo?.isPaused),
       pauseReason: pauseInfo?.reason,
       pendingCount,
-      vipPendingCount,
+      priorityPendingCount,
+      vipPendingCount: priorityPendingCount,
     };
   }
 
@@ -598,16 +599,16 @@ export class SessionManager {
           break;
         }
 
-        // 1. Prioritaskan pesan VIP (OTP) terlebih dahulu
+        // 1. Prioritaskan pesan Priority (High) terlebih dahulu
         let msg: OutboundMessage | undefined;
-        let isVip = false;
+        let isHighPriority = false;
 
-        const vipQueue = this.vipQueues.get(sessionId);
-        if (vipQueue && vipQueue.length > 0) {
-          msg = vipQueue.shift();
-          isVip = true;
+        const priorityQueue = this.priorityQueues.get(sessionId);
+        if (priorityQueue && priorityQueue.length > 0) {
+          msg = priorityQueue.shift();
+          isHighPriority = true;
         } else {
-          // 2. Jika tidak ada pesan VIP, ambil dari antrean blast reguler
+          // 2. Jika tidak ada pesan Priority, ambil dari antrean blast reguler
           const normalQueue = this.normalQueues.get(sessionId);
           if (!normalQueue || normalQueue.length === 0) {
             break; // Kedua antrean kosong, selesai!
@@ -655,7 +656,7 @@ export class SessionManager {
         const content = msg.text || msg.caption || '';
 
         // 4. Pengecekan Anti-Ban
-        if (!isVip) {
+        if (!isHighPriority) {
           // Jalur Blast Normal: wajib patuhi cooldown ban recovery & timelock 463
           const recoveryDecision = ab.recovery.beforeSend();
           if (!recoveryDecision.allowed) {
@@ -706,8 +707,8 @@ export class SessionManager {
         }
 
         // 6. Rate Limiter & Delay Pacing
-        if (isVip) {
-          // Jalur Cepat (VIP/OTP): Pacing minimal 1 detik agar natural di socket WA, bypass cooldown blast
+        if (isHighPriority) {
+          // Jalur Prioritas Tinggi: Pacing minimal 1 detik agar natural di socket WA, bypass cooldown blast
           msg.jitterDelayMs = 1000;
           updateMessageStatus(msg.id, 'pacing', undefined, 1000);
           await new Promise((r) => setTimeout(r, 1000));
@@ -765,7 +766,7 @@ export class SessionManager {
           ab.contactGraph.recordSent(jid);
           ab.reconnect.onReconnect();
           this.persistAntiBan(sessionId);
-          console.log(`[session:${sessionId}] ✉️ [${isVip ? 'VIP-OTP' : 'BLAST'}] Pesan ${msg.id} terkirim (messageId: ${messageId})`);
+          console.log(`[session:${sessionId}] ✉️ [${isHighPriority ? 'PRIORITY-HIGH' : 'BLAST'}] Pesan ${msg.id} terkirim (messageId: ${messageId})`);
         } catch (err: any) {
           const errMsg = err?.message || String(err);
           updateMessageStatus(msg.id, 'failed', errMsg);

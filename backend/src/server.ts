@@ -99,6 +99,7 @@ const sendLocationSchema = z.object({
   longitude: z.number().min(-180).max(180),
   name: z.string().optional(),
   address: z.string().optional(),
+  priority: z.enum(['high', 'normal']).optional(),
   batchId: z.string().optional(),
 });
 
@@ -785,6 +786,7 @@ app.post('/api/v1/messages/send-location', { preHandler: requireAuth }, async (r
     latitude: data.latitude, longitude: data.longitude,
     name: data.name, address: data.address,
     batchId: data.batchId,
+    priority: data.priority,
   });
   return reply.code(202).send({ success: true, messageId: msg.id, type: 'location', status: msg.status });
 });

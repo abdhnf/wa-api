@@ -60,7 +60,8 @@ export interface QueueSessionStatus {
   isPaused: boolean;
   pauseReason?: string;
   pendingCount: number;
-  vipPendingCount: number;
+  priorityPendingCount: number;
+  vipPendingCount?: number; // Deprecated alias untuk backward compatibility
 }
 
 export interface UserRecord {
