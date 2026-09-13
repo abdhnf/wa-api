@@ -1,1 +1,469 @@
 @import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Summer Light design tokens for the WA Gateway panel.
+
+   Direction read:
+   "Reading this as: internal operator console for WhatsApp gateway admins, in a
+   clean light summer language, dial ENERGY 1 / RHYTHM 2 / MOTION 1."
+
+   Palette is purpose-built, not the AI default: a warm sand ground keeps the
+   screen readable under office lighting, pine carries every primary action, and
+   a single deep sun-baked accent (clay) marks destructive or failing work.
+   Alert families are used in their SOFT register only: a washed tint for the
+   container, a deep ink for the text, never a saturated fill behind text.
+   --------------------------------------------------------------------------- */
+
+@theme {
+  /* Ground and surfaces */
+  --color-shell: #fbf8ef;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f4efdf;
+  --color-surface-sunken: #f8f5ea;
+  --color-line: #e4dcc4;
+  --color-line-strong: #cfc4a3;
+
+  /* Ink scale (warm neutral, kept above 4.5:1 on ground) */
+  --color-ink: #23301f;
+  --color-ink-soft: #3d4a35;
+  --color-ink-muted: #5c6752;
+  --color-ink-faint: #5f6a56;
+
+  /* Brand: pine */
+  --color-pine: #1f7a4d;
+  --color-pine-strong: #17603d;
+  --color-pine-deep: #0f4529;
+  --color-pine-soft: #34a06a;
+  --color-pine-wash: #e3f2e8;
+  --color-pine-line: #a9d7bd;
+
+  /* Info: sea */
+  --color-sea: #1c6b8a;
+  --color-sea-deep: #14506a;
+  --color-sea-soft: #2f8cad;
+  --color-sea-wash: #e2eff5;
+  --color-sea-line: #a8cede;
+
+  /* Success: leaf (separate from brand so "connected" reads differently to "primary") */
+  --color-leaf: #2e7d32;
+  --color-leaf-deep: #1c5220;
+  --color-leaf-wash: #e6f3e6;
+  --color-leaf-line: #aed5b0;
+
+  /* Warning: honey */
+  --color-honey: #a16207;
+  --color-honey-deep: #7a4a05;
+  --color-honey-wash: #fbf1d8;
+  --color-honey-line: #e6cf94;
+
+  /* Danger: clay */
+  --color-clay: #b23a2e;
+  --color-clay-deep: #8f2c22;
+  --color-clay-wash: #fbeaea;
+  --color-clay-line: #e9b8b3;
+
+  /* Neutral alert: slate */
+  --color-slate: #55636f;
+  --color-slate-deep: #3e4954;
+  --color-slate-wash: #edf0f3;
+  --color-slate-line: #cbd3da;
+}
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Sticky positioning breaks when an ancestor becomes a scroll container.
+   `overflow-x: hidden` on html/body/#root did exactly that, which is why the
+   header and sidebar scrolled away with the content. `clip` contains overflow
+   without creating a scroll container, so sticky keeps working. */
+html,
+body,
+#root {
+  min-height: 100%;
+  overflow-x: clip;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-shell);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background-color: var(--color-honey-wash);
+  color: var(--color-ink);
+}
+
+button,
+[role="button"],
+a {
+  min-height: 0;
+}
+
+/* Visible keyboard focus (R-32). Never removed, only restyled. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-pine);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+   Controls: one radius family (4 to 8 px), no drop shadows. Hierarchy comes
+   from border and fill contrast, which stays legible on the flat summer ground.
+   --------------------------------------------------------------------------- */
+
+.wa-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border-radius: 6px;
+  font-weight: 600;
+  line-height: 1;
+  border: 1px solid transparent;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+  cursor: pointer;
+}
+
+/* Primary action: pine fill, cream label, 5.4:1 contrast. */
+.wa-control-primary {
+  background-color: var(--color-pine);
+  color: #ffffff;
+  border-color: var(--color-pine-strong);
+}
+
+.wa-control-primary:hover {
+  background-color: var(--color-pine-strong);
+}
+
+/* Secondary action: quiet surface with a real border. */
+.wa-control-secondary {
+  background-color: var(--color-surface);
+  color: var(--color-ink-soft);
+  border-color: var(--color-line-strong);
+}
+
+.wa-control-secondary:hover {
+  background-color: var(--color-surface-alt);
+  color: var(--color-ink);
+}
+
+.wa-control:disabled,
+.wa-control[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------------------
+   Alert and badge families. Soft register only:
+   washed background + deep ink text. No saturated fill behind text.
+   --------------------------------------------------------------------------- */
+
+.wa-badge,
+.wa-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.wa-badge {
+  padding: 0.15rem 0.45rem;
+  font-size: 0.6875rem;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.wa-alert {
+  padding: 0.65rem 0.8rem;
+  font-size: 0.75rem;
+  width: 100%;
+}
+
+.wa-badge-neutral,
+.wa-alert-neutral {
+  background-color: var(--color-slate-wash);
+  color: var(--color-slate-deep);
+  border-color: var(--color-slate-line);
+}
+
+.wa-badge-info,
+.wa-alert-info {
+  background-color: var(--color-sea-wash);
+  color: var(--color-sea-deep);
+  border-color: var(--color-sea-line);
+}
+
+.wa-badge-success,
+.wa-alert-success {
+  background-color: var(--color-leaf-wash);
+  color: var(--color-leaf-deep);
+  border-color: var(--color-leaf-line);
+}
+
+.wa-badge-warning,
+.wa-alert-warning {
+  background-color: var(--color-honey-wash);
+  color: var(--color-honey-deep);
+  border-color: var(--color-honey-line);
+}
+
+.wa-badge-danger,
+.wa-alert-danger {
+  background-color: var(--color-clay-wash);
+  color: var(--color-clay-deep);
+  border-color: var(--color-clay-line);
+}
+
+/* Admin and role labels reuse the info family so the console keeps one accent. */
+.wa-badge-admin {
+  background-color: var(--color-sea-wash);
+  color: var(--color-sea-deep);
+  border-color: var(--color-sea-line);
+}
+
+.wa-badge-brand {
+  background-color: var(--color-pine-wash);
+  color: var(--color-pine-deep);
+  border-color: var(--color-pine-line);
+}
+
+/* ---------------------------------------------------------------------------
+   Structure: sidebar is a flat panel, content sits on the sand ground.
+   --------------------------------------------------------------------------- */
+
+.wa-sidebar {
+  background-color: var(--color-surface);
+  border-right: 1px solid var(--color-line);
+}
+
+.wa-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-height: 38px;
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-ink-soft);
+  text-align: left;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+  cursor: pointer;
+}
+
+.wa-nav-item:hover {
+  background-color: var(--color-surface-alt);
+  color: var(--color-ink);
+}
+
+.wa-nav-item[aria-current="page"] {
+  background-color: var(--color-pine-wash);
+  color: var(--color-pine-deep);
+  border-color: var(--color-pine-line);
+}
+
+.wa-nav-group-label {
+  padding: 0 0.6rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--color-ink-faint);
+}
+
+.wa-panel {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+}
+
+.wa-panel-quiet {
+  background-color: var(--color-surface-sunken);
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+}
+
+.wa-header {
+  background-color: var(--color-surface);
+  border-bottom: 1px solid var(--color-line);
+}
+
+/* Every control clears the 44px touch target on touch widths (R-03). */
+@media (max-width: 1023px) {
+  .wa-tap {
+    position: relative;
+  }
+
+  .wa-tap::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+  }
+
+  .wa-nav-item {
+    min-height: 44px;
+  }
+
+  .wa-control,
+  .wa-bottomnav button {
+    min-height: 44px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Docs typography and scroll containment.
+   --------------------------------------------------------------------------- */
+
+.wa-prose {
+  color: var(--color-ink-soft);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+
+.wa-prose h2,
+.wa-prose h3 {
+  color: var(--color-ink);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.wa-prose code {
+  background-color: var(--color-surface-alt);
+  border: 1px solid var(--color-line);
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.8125em;
+}
+
+.wa-prose pre {
+  background-color: var(--color-surface-alt);
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  padding: 0.75rem 0.9rem;
+  overflow-x: auto;
+}
+
+.wa-chat-canvas {
+  background-color: #efeae2;
+  background-repeat: repeat;
+  background-size: 360px auto;
+  background-blend-mode: normal;
+  opacity: 1;
+}
+
+.wa-codeblock {
+  background-color: var(--color-surface-alt);
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  padding: 0.9rem;
+  color: var(--color-ink-soft);
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.wa-scroll-x {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.wa-scroll-y {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+/* Thumb-friendly bottom navigation: shared by every navy entry on mobile. */
+.wa-bottomnav {
+  background-color: var(--color-surface);
+  border-top: 1px solid var(--color-line);
+}
+
+.wa-bottomnav button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  min-width: 56px;
+  gap: 0.15rem;
+  border-radius: 6px;
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: var(--color-ink-muted);
+  cursor: pointer;
+}
+
+.wa-bottomnav button[aria-current="page"] {
+  color: var(--color-pine-deep);
+  background-color: var(--color-pine-wash);
+}
+
+/* Motion: hover and state transitions only, no loops (MOTION 1). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Page transition animation */
+@keyframes waFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.wa-page-transition {
+  animation: waFadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Mobile bottom sheet slide up */
+@keyframes waSlideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.wa-drawer-bottom {
+  animation: waSlideUp 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes waBackdropFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.wa-backdrop-fade {
+  animation: waBackdropFade 0.2s ease-out forwards;
+}

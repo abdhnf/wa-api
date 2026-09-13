@@ -277,8 +277,19 @@ export async function apiResumeQueue(sessionId: string) {
   });
 }
 
-export async function apiGetSessionMessages(sessionId: string) {
-  return request(`/messages/${sessionId}`);
+/// Riwayat pesan satu session. Backend sudah mendukung limit, offset, dan
+/// mengembalikan total, jadi pagination dilakukan server-side.
+export async function apiGetSessionMessages(
+  sessionId: string,
+  params?: { limit?: number; offset?: number; status?: string; batchId?: string },
+) {
+  const qs = new URLSearchParams();
+  if (params?.limit != null) qs.set('limit', String(params.limit));
+  if (params?.offset != null) qs.set('offset', String(params.offset));
+  if (params?.status) qs.set('status', params.status);
+  if (params?.batchId) qs.set('batchId', params.batchId);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return request(`/messages/${sessionId}${suffix}`);
 }
 
 export async function apiGetMessageStatus(messageId: string) {

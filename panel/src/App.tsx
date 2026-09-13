@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { 
-  Smartphone, Users, MessageSquare, BookOpen, 
-  Activity, LogOut, Menu, X, ShieldAlert, Plus, Pencil, Trash2, KeyRound, Loader2, ShieldCheck, Settings, ScrollText,
-  ChevronDown, MoreHorizontal, Shield, Sparkles, ExternalLink, Send
+import {
+  Smartphone, Users, MessageSquare, BookOpen,
+  Activity, LogOut, Menu, X, ShieldAlert, KeyRound,
+  Settings, ScrollText, ChevronDown, Shield, Send,
+  PanelLeftClose, PanelLeft
 } from 'lucide-react';
 import { Playground } from './components/Playground';
 import { Docs } from './components/Docs';
@@ -14,75 +15,84 @@ import { SettingsPage } from './components/SettingsPage';
 import { UsersPage } from './components/UsersPage';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { BlastAccessModal } from './components/BlastAccessModal';
-import { getStoredAuth, clearAuth, apiGetMyProfile, apiGetUsers, apiRotateApiKey, apiCreateUser, apiUpdateUser, apiDeleteUser, apiResetPassword } from './api';
+import { getStoredAuth, clearAuth, apiGetMyProfile, apiGetUsers, apiRotateApiKey } from './api';
 import { type User, EMPTY_USERS } from './dummyData';
 
 const emptyForm = { name: '', email: '', password: '', role: 'user', quotaPerDay: 100, status: 'active', assignedSessionId: '' };
 
+type TabId = 'monitor' | 'playground' | 'sessions' | 'logs' | 'users' | 'docs' | 'settings';
+
+// Sidebar needs no separate short labels: every label fits the 224px rail.
+const coreNavItems: { id: TabId; label: string; icon: React.ElementType }[] = [
+  { id: 'playground', label: 'Playground', icon: MessageSquare },
+  { id: 'monitor', label: 'Monitor & Queue', icon: Activity },
+  { id: 'sessions', label: 'Sessions', icon: Smartphone },
+  { id: 'logs', label: 'API Logs', icon: ScrollText },
+  { id: 'docs', label: 'Docs', icon: BookOpen },
+];
+
+const adminNavItems: { id: TabId; label: string; desc: string; icon: React.ElementType }[] = [
+  { id: 'users', label: 'Users & API Keys', desc: 'Akun, hak akses, limit kuota', icon: Users },
+  { id: 'settings', label: 'System Settings', desc: 'Turnstile, Google OAuth, security', icon: Settings },
+];
+
 export const App: React.FC = () => {
   const [auth, setAuth] = useState(getStoredAuth());
-  const [activeTab, setActiveTab] = useState<'monitor' | 'playground' | 'sessions' | 'logs' | 'users' | 'docs' | 'settings'>('playground');
-  const [isNavigating, setIsNavigating] = useState(false);
-  const [navProgress, setNavProgress] = useState(0);
+  const [activeTab, setActiveTab] = useState<TabId>('playground');
   const [users, setUsers] = useState<User[]>(EMPTY_USERS);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('wa_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('wa_sidebar_collapsed', String(next));
+      } catch {}
+      return next;
+    });
+  };
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [blastModalOpen, setBlastModalOpen] = useState(false);
+  const [adminMenuOpen, setAdminMenuOpen] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+  const adminMenuRef = useRef<HTMLDivElement>(null);
+
+  const isAdmin = auth.user?.role === 'admin';
+  const currentUser = auth.user;
 
   useEffect(() => {
     apiGetMyProfile().then(p => {
-      if (p) {
-        setAuth(getStoredAuth());
-      }
+      if (p) setAuth(getStoredAuth());
     }).catch(() => {});
   }, []);
-  const [adminDropdownOpen, setAdminDropdownOpen] = useState(false);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [userModal, setUserModal] = useState<{ open: boolean; mode: 'create' | 'edit' | 'reset'; target?: User; form: typeof emptyForm }>({
-    open: false,
-    mode: 'create',
-    form: emptyForm,
-  });
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
-  const [rotatingId, setRotatingId] = useState<string | null>(null);
 
-  const adminDropdownRef = useRef<HTMLDivElement>(null);
-
-  const isAdmin = auth.user?.role === 'admin';
-  const isAdminTabActive = activeTab === 'users' || activeTab === 'settings';
-
-  // Tutup dropdown saat klik di luar
+  // Menutup menu admin saat klik di luar area menu.
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (adminDropdownRef.current && !adminDropdownRef.current.contains(event.target as Node)) {
-        setAdminDropdownOpen(false);
+    const onClickOutside = (event: MouseEvent) => {
+      if (adminMenuRef.current && !adminMenuRef.current.contains(event.target as Node)) {
+        setAdminMenuOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
 
-  const handleSwitchTab = (tab: 'monitor' | 'playground' | 'sessions' | 'logs' | 'users' | 'docs' | 'settings') => {
-    if (tab === activeTab) {
-      setAdminDropdownOpen(false);
-      setMobileMenuOpen(false);
-      return;
-    }
-    setIsNavigating(true);
-    setNavProgress(25);
-    setAdminDropdownOpen(false);
-    setMobileMenuOpen(false);
-    setTimeout(() => setNavProgress(70), 80);
-    setTimeout(() => {
-      setActiveTab(tab);
-      setNavProgress(100);
-      setTimeout(() => {
-        setIsNavigating(false);
-        setNavProgress(0);
-      }, 200);
-    }, 150);
-  };
+  // Drawer ditutup setiap kali berpindah tab, dan bisa ditutup dengan Escape.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDrawerOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [drawerOpen]);
 
   const showToast = useCallback((msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -109,474 +119,420 @@ export const App: React.FC = () => {
     } catch { /* backend offline */ }
   }, [isAdmin]);
 
-  // Fetch users saat mount + auto-refresh 10s (admin only)
   useEffect(() => {
     fetchUsers();
     const iv = setInterval(fetchUsers, 10000);
     return () => clearInterval(iv);
   }, [fetchUsers]);
 
-  // User non-admin tidak bisa buka tab Users atau Settings (role permission)
+  // User non-admin tidak boleh berada di tab Users atau Settings.
   useEffect(() => {
     if (!isAdmin && (activeTab === 'users' || activeTab === 'settings')) {
       setActiveTab('playground');
     }
   }, [isAdmin, activeTab]);
 
-  // Jika belum login, tampilkan AuthPage
-  if (!auth.token || !auth.user) {
-    return (
-      <AuthPage
-        onLoginSuccess={() => {
-          setAuth(getStoredAuth());
-        }}
-      />
-    );
-  }
-
-  const currentUser = auth.user;
+  const handleSwitchTab = (tab: TabId) => {
+    setAdminMenuOpen(false);
+    setDrawerOpen(false);
+    setActiveTab(tab);
+  };
 
   const handleLogout = () => {
     clearAuth();
     setAuth({ token: null, user: null });
   };
 
-  const handleRotateKey = async (userId: string) => {
-    setRotatingId(userId);
-    try {
-      const res = await apiRotateApiKey(userId);
-      if (res?.apiKey) {
-        setUsers(prev => prev.map(u => u.id === userId ? { ...u, apiKey: res.apiKey } : u));
-        showToast('API key berhasil dirotasi!', 'success');
-      } else {
-        showToast(res?.error || 'Gagal rotasi API key', 'error');
-      }
-    } catch (e: any) {
-      showToast(`Gagal: ${e.message}`, 'error');
-    } finally {
-      setRotatingId(null);
-    }
+  if (!auth.token || !auth.user) {
+    return <AuthPage onLoginSuccess={() => setAuth(getStoredAuth())} />;
+  }
+
+  const navButton = (
+    item: { id: TabId; label: string; icon: React.ElementType },
+    onPick: (t: TabId) => void,
+    isCollapsed = false
+  ) => {
+    const Icon = item.icon;
+    const isActive = activeTab === item.id;
+    return (
+      <button
+        key={item.id}
+        type="button"
+        onClick={() => onPick(item.id)}
+        aria-current={isActive ? 'page' : undefined}
+        title={isCollapsed ? item.label : undefined}
+        className={`wa-nav-item wa-tap ${isCollapsed ? 'justify-center px-0 w-10 h-10 mx-auto' : ''} ${
+          isActive ? 'wa-nav-item-active' : ''
+        }`}
+      >
+        <Icon className="w-4 h-4 shrink-0" />
+        {!isCollapsed && <span className="truncate">{item.label}</span>}
+      </button>
+    );
   };
-
-  const handleToggleStatus = async (u: User) => {
-    const next = u.status === 'active' ? 'suspended' : 'active';
-    try {
-      await apiUpdateUser(u.id, { status: next });
-      showToast(`User ${next === 'active' ? 'diaktifkan' : 'di-suspend'}`, 'success');
-      fetchUsers();
-    } catch (e: any) {
-      showToast(`Gagal: ${e.message}`, 'error');
-    }
-  };
-
-  // Navigasi Inti (Semua User)
-  const coreNavItems = [
-    { id: 'playground' as const, label: 'Playground', shortLabel: 'Play', icon: MessageSquare },
-    { id: 'monitor' as const, label: 'Monitor & Queue', shortLabel: 'Monitor', icon: Activity },
-    { id: 'sessions' as const, label: 'Sessions', shortLabel: 'Sessions', icon: Smartphone },
-    { id: 'logs' as const, label: 'API Logs', shortLabel: 'Logs', icon: ScrollText },
-    { id: 'docs' as const, label: 'Docs', shortLabel: 'Docs', icon: BookOpen },
-  ];
-
-  // Navigasi Admin
-  const adminNavItems = [
-    { id: 'users' as const, label: 'Users & API Keys', desc: 'Kelola akun, hak akses & limit kuota', icon: Users },
-    { id: 'settings' as const, label: 'System Settings', desc: 'Turnstile, Google OAuth & Security', icon: Settings },
-  ];
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col font-sans selection:bg-emerald-500/30">
-      {/* Toast */}
+    <div className="min-h-screen bg-shell text-ink">
       {toast && (
-        <div className={`fixed bottom-20 sm:bottom-5 right-5 z-[100] px-4 py-3 rounded-2xl shadow-2xl text-sm font-semibold animate-in slide-in-from-bottom-4 fade-in duration-200 ${
-          toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'
-        }`}>
+        <div
+          role="status"
+          className={`fixed bottom-20 lg:bottom-6 right-4 z-50 px-3.5 py-2.5 text-xs wa-alert ${
+            toast.type === 'success' ? 'wa-alert-success' : 'wa-alert-danger'
+          }`}
+        >
           {toast.msg}
         </div>
       )}
 
-      {/* Top Navbar Header */}
-      <header className="border-b border-gray-800/80 bg-gray-900/90 backdrop-blur-md sticky top-0 z-40 transition-all">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
-          
-          {/* Sisi Kiri: Brand & Logo */}
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center shadow-lg shadow-emerald-950 font-bold text-sm text-white">
-              WA
-            </div>
-            <div className="hidden sm:flex items-center gap-1.5">
-              <span className="font-bold text-xs sm:text-sm tracking-tight text-gray-100">
-                WA Gateway
+      {/* Sticky top header: identity, account, and every cross-page action */}
+      <header className="wa-header sticky top-0 z-40">
+        <div className="h-14 px-3 lg:px-5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            {/* Desktop only toggle sidebar: memperluas/menyembunyikan sidebar menjadi icon saja */}
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              className="wa-control wa-control-secondary wa-tap w-9 h-9 px-0 items-center justify-center !hidden lg:!inline-flex"
+              aria-label={sidebarCollapsed ? "Perluas sidebar" : "Ciutkan sidebar jadi ikon"}
+              title={sidebarCollapsed ? "Perluas sidebar" : "Ciutkan sidebar jadi ikon"}
+            >
+              {sidebarCollapsed ? <PanelLeft className="w-4 h-4 text-ink-muted" /> : <PanelLeftClose className="w-4 h-4 text-ink-muted" />}
+            </button>
+
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="grid place-items-center w-8 h-8 rounded-md bg-pine text-surface font-bold text-xs shrink-0">
+                WA
               </span>
-              <span className="text-[9px] bg-emerald-950 text-emerald-400 border border-emerald-800/60 px-1.5 py-0.2 rounded-full font-mono font-medium">
-                v7
-              </span>
+              <span className="font-bold text-sm text-ink truncate">WA Gateway</span>
+              <span className="wa-badge wa-badge-brand font-mono">v7</span>
             </div>
           </div>
 
-          {/* Sisi Tengah: Desktop Navigation Bar (Padding Compact & Responsive Label) */}
-          <nav className="hidden lg:flex items-center gap-0.5 bg-gray-950/80 p-1 rounded-2xl border border-gray-800/80 shadow-xs shrink-0">
-            {coreNavItems.map(item => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => handleSwitchTab(item.id)}
-                  className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                    isActive
-                      ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'text-gray-400 hover:text-gray-200 hover:bg-gray-900/90'
-                  }`}
-                  title={item.label}
-                >
-                  <Icon className="w-3.5 h-3.5 shrink-0" />
-                  <span className="hidden xl:inline">{item.label}</span>
-                  <span className="xl:hidden">{item.shortLabel}</span>
-                </button>
-              );
-            })}
-
-            {/* Admin Dropdown Pill (Khusus Admin, Menyatukan Users & Settings) */}
-            {isAdmin && (
-              <div className="relative ml-0.5" ref={adminDropdownRef}>
-                <button
-                  onClick={() => setAdminDropdownOpen(!adminDropdownOpen)}
-                  className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                    isAdminTabActive
-                      ? 'bg-purple-600 text-white shadow-xs'
-                      : 'text-gray-400 hover:text-gray-200 hover:bg-gray-900/90'
-                  }`}
-                >
-                  <Shield className="w-3.5 h-3.5 text-purple-300 shrink-0" />
-                  <span>Admin</span>
-                  <ChevronDown className={`w-3 h-3 transition-transform ${adminDropdownOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                {/* Popover Menu Dropdown */}
-                {adminDropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-56 bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
-                    <div className="px-3 py-1.5 border-b border-gray-800/80 text-[10px] font-bold text-gray-500 uppercase tracking-wider">
-                      Manajemen Sistem
-                    </div>
-                    {adminNavItems.map(aItem => {
-                      const AIcon = aItem.icon;
-                      const isSubActive = activeTab === aItem.id;
-                      return (
-                        <button
-                          key={aItem.id}
-                          onClick={() => handleSwitchTab(aItem.id)}
-                          className={`w-full flex items-start gap-2.5 p-2.5 rounded-xl text-left transition cursor-pointer ${
-                            isSubActive
-                              ? 'bg-purple-950/50 text-purple-200 border border-purple-800/50'
-                              : 'text-gray-300 hover:bg-gray-800/70 hover:text-white'
-                          }`}
-                        >
-                          <AIcon className={`w-4 h-4 mt-0.5 shrink-0 ${isSubActive ? 'text-purple-400' : 'text-gray-400'}`} />
-                          <div>
-                            <div className="text-xs font-semibold">{aItem.label}</div>
-                            <div className="text-[10px] text-gray-400 leading-tight mt-0.5">{aItem.desc}</div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </nav>
-
-          {/* Sisi Kanan: User Info & Actions */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* Tombol API Key Navbar */}
+          <div className="flex items-center gap-2 shrink-0">
             <button
+              type="button"
               onClick={() => setApiKeyModalOpen(true)}
-              className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-800/60 text-emerald-300 text-xs font-semibold transition cursor-pointer shadow-xs"
-              title="Lihat API Key & Kuota Akun"
+              className="wa-control wa-control-secondary wa-tap h-9 px-2.5 text-xs"
+              title="Lihat API key dan kuota akun"
             >
-              <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
+              <KeyRound className="w-4 h-4 text-pine" />
               <span className="hidden xl:inline">API Key</span>
             </button>
 
-            {/* Tombol Blast Dashboard Akses */}
             <button
+              type="button"
               onClick={() => setBlastModalOpen(true)}
-              className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-blue-950/60 hover:bg-blue-900/80 border border-blue-800/60 text-blue-300 text-xs font-semibold transition cursor-pointer shadow-xs"
+              className="wa-control wa-control-secondary wa-tap h-9 px-2.5 text-xs"
               title="Akses WhatsApp Blast Dashboard"
             >
-              <Send className="w-3.5 h-3.5 text-blue-400" />
+              <Send className="w-4 h-4 text-sea" />
               <span className="hidden xl:inline">Blast App</span>
             </button>
 
-            {/* User Profile Capsule */}
-            <div 
-              onClick={() => setApiKeyModalOpen(true)}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-gray-950/70 border border-gray-800/70 hover:border-gray-700 cursor-pointer transition"
-              title="Klik untuk melihat detail profil & API key"
+            <div className="h-5 w-px bg-line" aria-hidden="true" />
+
+            {/* Profil penanda murni akun (bukan pemantik dialog modal) */}
+            <div
+              className="inline-flex items-center gap-1.5 h-9 pl-1.5 pr-2 text-xs bg-surface-sunken border border-line rounded-md cursor-default select-none"
+              title={`Akun: ${currentUser.name} (${currentUser.role})`}
             >
-              <div className="w-6 h-6 rounded-lg bg-emerald-950 border border-emerald-800/60 text-emerald-400 flex items-center justify-center font-bold text-xs shrink-0">
+              <span className="grid place-items-center w-6 h-6 rounded bg-pine-wash text-pine-deep font-bold text-xs shrink-0">
                 {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
-              </div>
-              <div className="hidden xl:flex flex-col text-left max-w-[100px] truncate">
-                <span className="text-xs font-semibold text-gray-200 truncate">{currentUser.name}</span>
-              </div>
-              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-md ${
-                isAdmin 
-                  ? 'bg-purple-950/80 text-purple-400 border border-purple-800/60' 
+              </span>
+              <span className="hidden xl:inline max-w-[110px] truncate text-ink-soft font-medium">{currentUser.name}</span>
+              <span className={`wa-badge ${
+                isAdmin
+                  ? 'wa-badge-admin'
                   : currentUser.role === 'subscription'
-                    ? 'bg-amber-950/80 text-amber-400 border border-amber-800/60'
-                    : 'bg-blue-950/80 text-blue-400 border border-blue-800/60'
+                    ? 'wa-badge-warning'
+                    : 'wa-badge-neutral'
               }`}>
                 {currentUser.role}
               </span>
             </div>
 
-            {/* Logout Button */}
             <button
+              type="button"
               onClick={handleLogout}
-              className="p-1.5 sm:p-2 text-gray-400 hover:text-rose-400 hover:bg-gray-800/80 rounded-xl transition-colors border border-gray-800 cursor-pointer shadow-xs"
-              title="Keluar / Logout"
+              className="wa-control wa-control-secondary wa-tap w-9 h-9 px-0 text-clay"
+              title="Keluar dari akun"
+              aria-label="Keluar dari akun"
             >
               <LogOut className="w-4 h-4" />
-            </button>
-
-            {/* Hamburger Button (Mobile & Tablet) */}
-            <button
-              onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-1.5 sm:p-2 text-gray-300 hover:text-white hover:bg-gray-800 rounded-xl border border-gray-800 transition cursor-pointer shadow-xs"
-              title="Buka Menu"
-            >
-              <Menu className="w-5 h-5" />
             </button>
           </div>
         </div>
       </header>
 
-      {/* Main Content Area: Kembalikan max-w-7xl proporsional */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-3.5 sm:p-6 lg:p-8 pb-24 lg:pb-12">
-        {activeTab === 'playground' && <Playground />}
-        {activeTab === 'monitor' && <RealtimeMonitor isAdmin={isAdmin} />}
-        {activeTab === 'sessions' && <SessionsPage />}
-        {activeTab === 'logs' && <ApiLogsPage isAdmin={isAdmin} showToast={(msg, type) => showToast(msg, type === 'error' ? 'error' : 'success')} />}
-        {activeTab === 'docs' && <Docs />}
-        {activeTab === 'settings' && isAdmin && <SettingsPage />}
-        {activeTab === 'users' && isAdmin && <UsersPage onNotify={(msg, type) => showToast(msg, type === 'error' ? 'error' : 'success')} />}
+      <div className="flex min-h-[calc(100vh-3.5rem)]">
+        {/* Fixed sidebar (lg and up): dapat diringkas menjadi icon saja */}
+        <aside
+          className={`wa-sidebar hidden lg:flex lg:flex-col shrink-0 sticky top-14 self-start h-[calc(100vh-3.5rem)] py-3 transition-all duration-200 ${
+            sidebarCollapsed ? 'w-14 items-center px-1' : 'w-56 px-2'
+          }`}
+        >
+          <nav className="flex flex-col gap-0.5 w-full" aria-label="Navigasi utama">
+            {!sidebarCollapsed && <div className="wa-nav-group-label pb-1 px-2">Gateway</div>}
+            {coreNavItems.map(item => navButton(item, handleSwitchTab, sidebarCollapsed))}
+          </nav>
 
-        {/* Non-admin notice */}
-        {(activeTab === 'users' || activeTab === 'settings') && !isAdmin && (
-          <div className="bg-red-950/30 border border-red-800/50 rounded-2xl p-8 text-center animate-in fade-in">
-            <ShieldAlert className="mx-auto text-red-400 mb-2" size={28} />
-            <p className="text-sm text-red-300 font-semibold">Akses Terbatas</p>
-            <p className="text-xs text-red-400/70 mt-1">Halaman ini khusus untuk Administrator gateway.</p>
+          {isAdmin && (
+            <div className={`mt-4 w-full relative ${sidebarCollapsed ? 'px-0' : 'px-1'}`} ref={adminMenuRef}>
+              {!sidebarCollapsed && <div className="wa-nav-group-label pb-1 px-1">Administrasi</div>}
+              {sidebarCollapsed ? (
+                <div className="flex flex-col gap-1 w-full items-center">
+                  {adminNavItems.map(aItem => {
+                    const AIcon = aItem.icon;
+                    const isActive = activeTab === aItem.id;
+                    return (
+                      <button
+                        key={aItem.id}
+                        type="button"
+                        onClick={() => handleSwitchTab(aItem.id)}
+                        aria-current={isActive ? 'page' : undefined}
+                        title={aItem.label}
+                        className={`wa-nav-item wa-tap justify-center px-0 w-10 h-10 ${
+                          isActive ? 'wa-nav-item-active' : ''
+                        }`}
+                      >
+                        <AIcon className="w-4 h-4 shrink-0" />
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setAdminMenuOpen(!adminMenuOpen)}
+                    aria-expanded={adminMenuOpen}
+                    className="wa-nav-item wa-tap"
+                  >
+                    <Shield className="w-4 h-4 shrink-0" />
+                    <span className="truncate">Admin</span>
+                    <ChevronDown className={`w-3.5 h-3.5 ml-auto transition-transform ${adminMenuOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {adminMenuOpen && (
+                    <div className="mt-1 space-y-1 pl-3 border-l border-line">
+                      {adminNavItems.map(aItem => {
+                        const AIcon = aItem.icon;
+                        const isActive = activeTab === aItem.id;
+                        return (
+                          <button
+                            key={aItem.id}
+                            type="button"
+                            onClick={() => handleSwitchTab(aItem.id)}
+                            aria-current={isActive ? 'page' : undefined}
+                            className={`wa-nav-item wa-tap ${isActive ? 'wa-nav-item-active' : ''}`}
+                          >
+                            <AIcon className="w-4 h-4 shrink-0" />
+                            <span className="min-w-0">
+                              <span className="block truncate">{aItem.label}</span>
+                              <span className="block text-[11px] font-normal text-ink-faint truncate">{aItem.desc}</span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          <div className="mt-auto w-full pt-4">
+            {sidebarCollapsed ? (
+              <div
+                className="w-10 h-10 rounded-md bg-surface-sunken border border-line flex items-center justify-center mx-auto text-xs font-bold text-ink"
+                title={`${currentUser.name} (${currentUser.email})`}
+              >
+                {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
+              </div>
+            ) : (
+              <div className="wa-panel-quiet p-2.5">
+                <div className="text-[11px] font-semibold text-ink-soft truncate">{currentUser.name}</div>
+                <div className="text-[11px] text-ink-muted truncate">{currentUser.email}</div>
+              </div>
+            )}
           </div>
-        )}
-      </main>
+        </aside>
 
-      {/* Modal API Key & Kuota Pengguna */}
+        <main key={activeTab} className="flex-1 min-w-0 px-3 sm:px-5 lg:px-6 py-4 lg:py-6 pb-24 lg:pb-6 wa-page-transition">
+          {activeTab === 'playground' && <Playground />}
+          {activeTab === 'monitor' && <RealtimeMonitor isAdmin={isAdmin} />}
+          {activeTab === 'sessions' && <SessionsPage />}
+          {activeTab === 'logs' && <ApiLogsPage isAdmin={isAdmin} showToast={(msg, type) => showToast(msg, type === 'error' ? 'error' : 'success')} />}
+          {activeTab === 'docs' && <Docs />}
+          {activeTab === 'settings' && isAdmin && <SettingsPage />}
+          {activeTab === 'users' && isAdmin && <UsersPage onNotify={(msg, type) => showToast(msg, type === 'error' ? 'error' : 'success')} />}
+
+          {(activeTab === 'users' || activeTab === 'settings') && !isAdmin && (
+            <div className="wa-alert wa-alert-danger flex-col items-start gap-1.5">
+              <ShieldAlert className="w-5 h-5" />
+              <span className="font-semibold">Akses terbatas</span>
+              <span>Halaman ini hanya untuk administrator gateway.</span>
+            </div>
+          )}
+        </main>
+      </div>
+
       <ApiKeyModal
         isOpen={apiKeyModalOpen}
         onClose={() => setApiKeyModalOpen(false)}
         user={auth.user}
-        onKeyRotated={(newKey) => {
+        onKeyRotated={() => {
           setAuth(getStoredAuth());
-          showToast('API Key Anda berhasil diperbarui!', 'success');
+          showToast('API key akun diperbarui', 'success');
         }}
-        onOpenDocs={() => {
-          setActiveTab('docs');
-        }}
+        onOpenDocs={() => setActiveTab('docs')}
       />
 
-      {/* Modal Akses WhatsApp Blast Dashboard */}
       <BlastAccessModal
         isOpen={blastModalOpen}
         onClose={() => setBlastModalOpen(false)}
         user={auth.user}
         onUserUpdated={() => {
           apiGetMyProfile().then(p => {
-            if (p && !p.error) {
-              setAuth(getStoredAuth());
-            }
+            if (p && !p.error) setAuth(getStoredAuth());
           });
         }}
       />
 
-
-      {/* Mobile Sticky Bottom Navigation Bar (Thumb-Friendly) */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-gray-900/95 backdrop-blur-lg border-t border-gray-800/90 px-2 py-1.5 shadow-2xl">
-        <div className="flex items-center justify-around max-w-md mx-auto">
-          {coreNavItems.map(item => {
+      {/* Mobile bottom navigation: primary destinations plus the full drawer */}
+      <nav className="wa-bottomnav lg:hidden fixed bottom-0 left-0 right-0 z-40 pb-[env(safe-area-inset-bottom)]" aria-label="Navigasi mobile">
+        <div className="flex items-stretch justify-around max-w-lg mx-auto px-1">
+          {coreNavItems.slice(0, 4).map(item => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
             return (
               <button
                 key={item.id}
+                type="button"
                 onClick={() => handleSwitchTab(item.id)}
-                className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition cursor-pointer ${
-                  isActive
-                    ? 'text-emerald-400 font-bold'
-                    : 'text-gray-400 hover:text-gray-200'
-                }`}
+                aria-current={isActive ? 'page' : undefined}
               >
-                <div className={`p-1 rounded-lg transition ${isActive ? 'bg-emerald-950/60' : ''}`}>
-                  <Icon className="w-4 h-4" />
-                </div>
-                <span className="text-[10px] mt-0.5 tracking-tight">{item.shortLabel}</span>
+                <Icon className="w-5 h-5" />
+                <span className="truncate max-w-[64px]">{item.label.split(' ')[0]}</span>
               </button>
             );
           })}
-
-          {/* Tombol Menu Tambahan di Mobile */}
           <button
-            onClick={() => setMobileMenuOpen(true)}
-            className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition cursor-pointer ${
-              isAdminTabActive ? 'text-purple-400 font-bold' : 'text-gray-400 hover:text-gray-200'
-            }`}
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            aria-expanded={drawerOpen}
+            aria-controls="wa-mobile-drawer"
+            className={activeTab === 'docs' || activeTab === 'settings' || activeTab === 'users' ? 'text-pine-deep' : undefined}
           >
-            <div className={`p-1 rounded-lg transition ${isAdminTabActive ? 'bg-purple-950/60' : ''}`}>
-              <MoreHorizontal className="w-4 h-4" />
-            </div>
-            <span className="text-[10px] mt-0.5 tracking-tight">Menu</span>
+            <Menu className="w-5 h-5" />
+            <span>Menu</span>
           </button>
         </div>
-      </div>
+      </nav>
 
-      {/* Mobile Slide-over Drawer / Bottom Sheet */}
-      {mobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center animate-in fade-in duration-150">
-          {/* Backdrop */}
-          <div 
-            className="fixed inset-0 bg-black/75 backdrop-blur-xs transition-opacity"
-            onClick={() => setMobileMenuOpen(false)}
+      {/* Mobile bottom sheet drawer: slide up dari bawah untuk kontrol penuh navigasi & akun */}
+      {drawerOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex flex-col justify-end">
+          <div
+            className="fixed inset-0 bg-ink/60 backdrop-blur-xs wa-backdrop-fade"
+            onClick={() => setDrawerOpen(false)}
+            aria-hidden="true"
           />
+          <div
+            id="wa-mobile-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Menu navigasi mobile"
+            className="relative z-10 w-full max-h-[85vh] bg-surface rounded-t-2xl border-t border-line shadow-2xl flex flex-col wa-scroll-y wa-drawer-bottom"
+          >
+            {/* Grab handle indicator */}
+            <div className="pt-2.5 pb-1 flex justify-center">
+              <div className="w-10 h-1.5 rounded-full bg-line-strong/60" />
+            </div>
 
-          {/* Drawer Box */}
-          <div className="relative w-full max-w-lg bg-gray-900 border-t sm:border border-gray-800 rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto z-10 animate-in slide-in-from-bottom duration-200">
-            {/* Header Drawer */}
-            <div className="flex items-center justify-between pb-3 border-b border-gray-800">
-              <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center text-white font-bold text-xs">
-                  WA
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-gray-100">Navigasi Panel</h3>
-                  <p className="text-[10px] text-gray-400">Pilih menu fitur WhatsApp Gateway</p>
-                </div>
-              </div>
+            <div className="flex items-center justify-between px-4 py-2 border-b border-line">
+              <span className="font-bold text-sm text-ink">Menu Navigasi</span>
               <button
-                onClick={() => setMobileMenuOpen(false)}
-                className="p-1.5 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition"
+                type="button"
+                onClick={() => setDrawerOpen(false)}
+                className="wa-control wa-control-secondary w-8 h-8 px-0"
+                aria-label="Tutup menu navigasi"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Profile Card di Drawer */}
-            <div className="bg-gray-950 border border-gray-800/80 rounded-2xl p-3 flex items-center justify-between">
+            <div className="p-4 border-b border-line bg-surface-sunken/60">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-emerald-950 border border-emerald-800/60 text-emerald-400 flex items-center justify-center font-bold text-sm">
+                <span className="grid place-items-center w-10 h-10 rounded-lg bg-pine-wash text-pine-deep font-bold text-sm shrink-0">
                   {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-gray-200">{currentUser.name}</div>
-                  <div className="text-[10px] text-gray-400 font-mono">{currentUser.email}</div>
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-ink truncate">{currentUser.name}</span>
+                    <span className={`wa-badge ${
+                      isAdmin
+                        ? 'wa-badge-admin'
+                        : currentUser.role === 'subscription'
+                          ? 'wa-badge-warning'
+                          : 'wa-badge-neutral'
+                    }`}>
+                      {currentUser.role}
+                    </span>
+                  </div>
+                  <span className="block text-[11px] text-ink-muted truncate">{currentUser.email}</span>
                 </div>
               </div>
-              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg ${
-                isAdmin 
-                  ? 'bg-purple-950 text-purple-400 border border-purple-800/50' 
-                  : currentUser.role === 'subscription'
-                    ? 'bg-amber-950 text-amber-400 border border-amber-800/50'
-                    : 'bg-blue-950 text-blue-400 border border-blue-800/50'
-              }`}>
-                {currentUser.role}
-              </span>
             </div>
 
-            {/* Quick API Key Button di Drawer */}
-            <button
-              onClick={() => {
-                setMobileMenuOpen(false);
-                setApiKeyModalOpen(true);
-              }}
-              className="w-full flex items-center justify-between p-3 bg-emerald-950/50 hover:bg-emerald-950/80 border border-emerald-800/60 rounded-2xl text-emerald-300 text-xs font-bold transition cursor-pointer"
-            >
-              <div className="flex items-center gap-2.5">
-                <KeyRound className="w-4 h-4 text-emerald-400" />
-                <span>API Key & Kuota Akun Saya</span>
-              </div>
-              <span className="text-[10px] bg-emerald-900/80 text-emerald-300 px-2 py-0.5 rounded-md font-mono border border-emerald-700/60">
-                Buka
-              </span>
-            </button>
+            <nav className="p-3 flex flex-col gap-1" aria-label="Navigasi utama mobile">
+              <div className="wa-nav-group-label pb-1 px-1">Menu Utama</div>
+              {coreNavItems.map(item => navButton(item, handleSwitchTab))}
+            </nav>
 
-            {/* Grup Navigasi Utama */}
-            <div className="space-y-1">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 px-2 py-1">
-                Fitur Utama Gateway
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                {coreNavItems.map(item => {
-                  const Icon = item.icon;
-                  const isActive = activeTab === item.id;
+            {isAdmin && (
+              <div className="px-3 pb-3 flex flex-col gap-1 border-t border-line pt-2">
+                <div className="wa-nav-group-label pb-1 px-1">Administrasi</div>
+                {adminNavItems.map(aItem => {
+                  const AIcon = aItem.icon;
+                  const isActive = activeTab === aItem.id;
                   return (
                     <button
-                      key={item.id}
-                      onClick={() => handleSwitchTab(item.id)}
-                      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer text-left ${
-                        isActive
-                          ? 'bg-emerald-600 text-white shadow-sm'
-                          : 'bg-gray-950/60 hover:bg-gray-800 text-gray-300 border border-gray-800/60'
-                      }`}
+                      key={aItem.id}
+                      type="button"
+                      onClick={() => handleSwitchTab(aItem.id)}
+                      aria-current={isActive ? 'page' : undefined}
+                      className={`wa-nav-item wa-tap ${isActive ? 'wa-nav-item-active' : ''}`}
                     >
-                      <Icon className="w-4 h-4 shrink-0" />
-                      <span>{item.label}</span>
+                      <AIcon className="w-4 h-4 shrink-0" />
+                      <span className="min-w-0">
+                        <span className="block truncate">{aItem.label}</span>
+                        <span className="block text-[11px] font-normal text-ink-faint truncate">{aItem.desc}</span>
+                      </span>
                     </button>
                   );
                 })}
               </div>
-            </div>
-
-            {/* Grup Navigasi Admin (Jika Admin) */}
-            {isAdmin && (
-              <div className="space-y-1 pt-2 border-t border-gray-800/80">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-purple-400 px-2 py-1 flex items-center gap-1.5">
-                  <Shield className="w-3 h-3" />
-                  <span>Administrasi Sistem (Admin)</span>
-                </div>
-                <div className="space-y-1.5">
-                  {adminNavItems.map(item => {
-                    const Icon = item.icon;
-                    const isActive = activeTab === item.id;
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => handleSwitchTab(item.id)}
-                        className={`w-full flex items-start gap-3 p-2.5 rounded-xl text-xs transition cursor-pointer text-left ${
-                          isActive
-                            ? 'bg-purple-600 text-white shadow-sm'
-                            : 'bg-gray-950/60 hover:bg-gray-800 text-gray-300 border border-gray-800/60'
-                        }`}
-                      >
-                        <Icon className="w-4 h-4 mt-0.5 shrink-0 text-purple-400" />
-                        <div>
-                          <div className="font-semibold">{item.label}</div>
-                          <div className="text-[10px] opacity-80 mt-0.5">{item.desc}</div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
             )}
 
-            {/* Tombol Logout Drawer */}
-            <div className="pt-2 border-t border-gray-800">
+            <div className="p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] border-t border-line flex flex-col gap-2 mt-auto bg-surface-sunken/40">
               <button
+                type="button"
+                onClick={() => {
+                  setDrawerOpen(false);
+                  setApiKeyModalOpen(true);
+                }}
+                className="wa-control wa-control-secondary h-10 w-full text-xs font-medium justify-center"
+              >
+                <KeyRound className="w-4 h-4 text-pine" />
+                API Key dan Kuota Akun
+              </button>
+              <button
+                type="button"
                 onClick={handleLogout}
-                className="w-full flex items-center justify-center gap-2 p-2.5 rounded-xl text-xs font-bold text-rose-400 bg-rose-950/20 hover:bg-rose-950/50 border border-rose-800/40 transition cursor-pointer"
+                className="wa-control wa-control-secondary h-10 w-full text-xs font-medium text-clay justify-center"
               >
                 <LogOut className="w-4 h-4" />
-                <span>Keluar dari Akun</span>
+                Keluar dari Akun
               </button>
             </div>
           </div>
