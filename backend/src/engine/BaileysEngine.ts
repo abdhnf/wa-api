@@ -256,6 +256,7 @@ export class BaileysEngine {
       case 'media': {
         // Dukung mediaUrl (URL publik) ATAU mediaBase64 (upload file dari panel)
         let buf: Buffer;
+        let fileName = msg.fileName;
         let mime: string;
         if (msg.mediaBase64) {
           const b64 = msg.mediaBase64.replace(/^data:[^;]+;base64,/, '');
@@ -265,8 +266,28 @@ export class BaileysEngine {
           const res = await fetch(msg.mediaUrl!);
           buf = Buffer.from(await res.arrayBuffer());
           mime = res.headers.get('content-type') || 'application/octet-stream';
+
+          if (!fileName) {
+            // Coba ambil nama file dari header Content-Disposition bila ada
+            const disposition = res.headers.get('content-disposition') || '';
+            const match = disposition.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i);
+            if (match && match[1]) {
+              fileName = decodeURIComponent(match[1].trim());
+            } else {
+              // Coba ekstrak nama file dari URL path
+              try {
+                const urlObj = new URL(msg.mediaUrl!);
+                const pathname = decodeURIComponent(urlObj.pathname);
+                const baseName = pathname.split('/').pop() || '';
+                // Abaikan jika nama file adalah UUID acak tanpa nama asli yang berarti
+                if (baseName && !/^[a-f0-9]{16,32}\.[a-z0-9]{2,5}$/i.test(baseName)) {
+                  fileName = baseName;
+                }
+              } catch {}
+            }
+          }
         }
-        const ext = (msg.fileName || '').split('.').pop() || mime.split('/')[1] || 'bin';
+        const ext = (fileName || '').split('.').pop() || mime.split('/')[1] || 'bin';
         const mediaField = msg.mediaType || 'image';
         const mediaObj: any = {
           [mediaField]: buf,
@@ -274,7 +295,7 @@ export class BaileysEngine {
           caption: msg.caption || undefined,
         };
         if (mediaField === 'document') {
-          mediaObj.fileName = msg.fileName || `file.${ext}`;
+          mediaObj.fileName = fileName || `file.${ext}`;
         }
         content = mediaObj;
         break;

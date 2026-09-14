@@ -1032,9 +1032,17 @@ app.post('/api/v1/media/upload', { preHandler: requireAuth }, async (req, reply)
     const id = `${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}${ext}`;
     await writeFile(join(MEDIA_DIR, id), buffer);
 
+    const meta = {
+      originalName: declaredName || '',
+      mimeType: declaredMime || '',
+      uploadedAt: Date.now(),
+    };
+    await writeFile(join(MEDIA_DIR, `${id}.json`), JSON.stringify(meta));
+
     return reply.code(201).send({
       success: true,
       id,
+      fileName: declaredName || undefined,
       url: mediaAbsoluteUrl(req as any, id),
       size: buffer.length,
       mimeType: declaredMime || undefined,
@@ -1064,6 +1072,17 @@ app.get('/api/v1/media/:id', async (req, reply) => {
     reply.header('Content-Type', mime);
     reply.header('Content-Length', String(info.size));
     reply.header('Cache-Control', 'private, max-age=3600');
+
+    // Jika ada metadata nama asli, kirim header Content-Disposition
+    try {
+      const metaRaw = await readFile(join(MEDIA_DIR, `${id}.json`), 'utf-8');
+      const meta = JSON.parse(metaRaw);
+      if (meta?.originalName) {
+        const encoded = encodeURIComponent(meta.originalName);
+        reply.header('Content-Disposition', `inline; filename="${meta.originalName.replace(/"/g, '')}"; filename*=UTF-8''${encoded}`);
+      }
+    } catch {}
+
     return reply.send(createReadStream(filePath));
   } catch {
     return reply.code(404).send({ error: 'Media tidak ditemukan atau sudah dibersihkan.' });
@@ -1075,6 +1094,7 @@ app.delete('/api/v1/media/:id', { preHandler: requireAuth }, async (req, reply) 
   if (!MEDIA_ID_PATTERN.test(id)) return reply.code(400).send({ error: 'ID media tidak valid.' });
   try {
     await unlink(join(MEDIA_DIR, id));
+    await unlink(join(MEDIA_DIR, `${id}.json`)).catch(() => {});
     return { success: true, deleted: id };
   } catch {
     return { success: false, message: 'Media sudah tidak ada.' };
@@ -1094,6 +1114,7 @@ setInterval(() => {
         const info = await stat(full).catch(() => null);
         if (info?.isFile() && now - info.mtimeMs > MEDIA_TTL_MS) {
           await unlink(full).catch(() => {});
+          await unlink(`${full}.json`).catch(() => {});
           removed++;
         }
       }
