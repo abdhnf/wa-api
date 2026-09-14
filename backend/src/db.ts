@@ -137,6 +137,7 @@ ensureColumn('users', 'used_in_period', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('users', 'quota_period', "TEXT NOT NULL DEFAULT 'weekly'");
 ensureColumn('messages', 'priority', "TEXT DEFAULT 'normal'");
 ensureColumn('users', 'blast_pin_hash', 'TEXT');
+ensureColumn('users', 'blast_access_token', 'TEXT');
 
 // Sinkronisasi data kuota existing
 try {
@@ -280,6 +281,30 @@ export function setUserBlastPin(id: string, pinHash: string): boolean {
   return (res as any).changes > 0;
 }
 
+export function getOrCreateUserBlastAccessToken(userId: string): string {
+  const user = getUserById(userId);
+  if (user?.blastAccessToken) {
+    return user.blastAccessToken;
+  }
+  // Tanpa prefix di depannya sesuai instruksi user
+  const token = crypto.randomUUID().replace(/-/g, '');
+  db.prepare('UPDATE users SET blast_access_token = ? WHERE id = ?').run(token, userId);
+  return token;
+}
+
+export function rotateUserBlastAccessToken(userId: string): string {
+  // Tanpa prefix di depannya sesuai instruksi user
+  const token = crypto.randomUUID().replace(/-/g, '');
+  db.prepare('UPDATE users SET blast_access_token = ? WHERE id = ?').run(token, userId);
+  return token;
+}
+
+export function getUserByBlastAccessToken(token: string): UserRecord | null {
+  if (!token) return null;
+  const row = db.prepare('SELECT * FROM users WHERE blast_access_token = ?').get(token) as any;
+  return row ? mapUser(row) : null;
+}
+
 export function createBlastLaunchToken(userId: string, ttlSeconds = 600): string {
   const token = `blst_${crypto.randomUUID().replace(/-/g, '')}`;
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
@@ -326,6 +351,7 @@ function mapUser(row: any): UserRecord {
     authProvider: row.auth_provider || 'local',
     avatarUrl: row.avatar_url || undefined,
     blastPinHash: row.blast_pin_hash || undefined,
+    blastAccessToken: row.blast_access_token || undefined,
   };
 }
 

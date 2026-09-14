@@ -91,6 +91,7 @@ export interface UserRecord {
   authProvider?: 'local' | 'google';
   avatarUrl?: string;
   blastPinHash?: string;
+  blastAccessToken?: string;
 }
 
 export interface WebhookRecord {

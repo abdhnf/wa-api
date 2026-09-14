@@ -14,6 +14,7 @@ import {
   getUserByEmail, getUserById, listUsers, createUser,
   upsertWebhook, listWebhooks, listMessages, listMessagesPaged, updateUser, deleteUser, setUserPassword, setUserApiKey,
   setUserBlastPin, createBlastLaunchToken, verifyAndBurnBlastLaunchToken,
+  getOrCreateUserBlastAccessToken, rotateUserBlastAccessToken, getUserByBlastAccessToken,
   getMessageById, db,
   getSetting, getAllSettings, setSettings, getAllUserSettings, setUserSettings, upsertGoogleUser, checkAndIncrementWeeklyQuota, getUserLogs, insertApiLog, listApiLogs, deleteApiLogs, clearApiLogs,
 } from './db.js';
@@ -247,7 +248,7 @@ app.post('/api/v1/auth/blast-pin', { preHandler: requireAuth }, async (req, repl
   return { success: true, message: 'PIN keamanan Blast Dashboard berhasil disimpan!' };
 });
 
-// Generate One-Time Launch URL / Token untuk membuka WhatsApp Blast Dashboard
+// Persistent Launch URL / Token untuk membuka WhatsApp Blast Dashboard (berlaku permanen)
 app.post('/api/v1/auth/blast-launch', { preHandler: requireAuth }, async (req, reply) => {
   const user = req.apiKeyUser || getUserById((req.user as any)?.id);
   if (!user) return reply.code(404).send({ error: 'User tidak ditemukan' });
@@ -261,7 +262,7 @@ app.post('/api/v1/auth/blast-launch', { preHandler: requireAuth }, async (req, r
     });
   }
 
-  const token = createBlastLaunchToken(user.id, 600); // 10 menit TTL
+  const token = getOrCreateUserBlastAccessToken(user.id);
   const blastDashboardBaseUrl = (getSetting('blast_dashboard_url') || 'http://172.30.30.229:8085').replace(/\/$/, '');
   const launchUrl = `${blastDashboardBaseUrl}/auth/launch?token=${token}`;
 
@@ -269,12 +270,30 @@ app.post('/api/v1/auth/blast-launch', { preHandler: requireAuth }, async (req, r
     success: true,
     token,
     launchUrl,
-    expiresInSeconds: 600,
+    persistent: true,
     hasBlastPin: true,
   };
 });
 
-// Verifikasi Handshake dari Blast Dashboard (Menerima Token + PIN, Burn Token, dan Mengembalikan API Key & Profil)
+// Regenerate / Revoke Blast Access Token
+app.post('/api/v1/auth/blast-launch/regenerate', { preHandler: requireAuth }, async (req, reply) => {
+  const user = req.apiKeyUser || getUserById((req.user as any)?.id);
+  if (!user) return reply.code(404).send({ error: 'User tidak ditemukan' });
+
+  const token = rotateUserBlastAccessToken(user.id);
+  const blastDashboardBaseUrl = (getSetting('blast_dashboard_url') || 'http://172.30.30.229:8085').replace(/\/$/, '');
+  const launchUrl = `${blastDashboardBaseUrl}/auth/launch?token=${token}`;
+
+  return {
+    success: true,
+    token,
+    launchUrl,
+    persistent: true,
+    message: 'Link akses WhatsApp Blast berhasil diperbarui. Link sebelumnya sudah tidak berlaku.',
+  };
+});
+
+// Verifikasi Handshake dari Blast Dashboard (Menerima Token Persistent/Temporary + PIN, dan Mengembalikan API Key & Profil)
 app.post('/api/v1/auth/verify-blast-launch', async (req, reply) => {
   const body = req.body as any;
   const token = typeof body?.token === 'string' ? body.token.trim() : '';
@@ -284,19 +303,22 @@ app.post('/api/v1/auth/verify-blast-launch', async (req, reply) => {
     return reply.code(400).send({ error: 'Token peluncuran blast wajib disertakan.' });
   }
 
-  // 1. Verifikasi dan bakar token peluncuran (burn on verify)
-  const tokenCheck = verifyAndBurnBlastLaunchToken(token);
-  if (!tokenCheck.valid || !tokenCheck.userId) {
-    return reply.code(401).send({ error: tokenCheck.reason || 'Token tidak valid atau telah kedaluwarsa.' });
-  }
+  // 1. Cek apakah ini token persistent user (blast_access_token)
+  let user = getUserByBlastAccessToken(token);
 
-  // 2. Ambil user
-  const user = getUserById(tokenCheck.userId);
+  // Jika bukan persistent token, fallback cek single-use token lama (backward compatibility)
   if (!user) {
-    return reply.code(404).send({ error: 'User terdaftar tidak ditemukan.' });
+    const tokenCheck = verifyAndBurnBlastLaunchToken(token);
+    if (tokenCheck.valid && tokenCheck.userId) {
+      user = getUserById(tokenCheck.userId);
+    }
   }
 
-  // 3. Verifikasi PIN numerik 6 digit
+  if (!user) {
+    return reply.code(401).send({ error: 'Token akses blast tidak valid atau telah digenerate ulang.' });
+  }
+
+  // 2. Verifikasi PIN numerik 6 digit
   if (!user.blastPinHash) {
     return reply.code(400).send({ error: 'User ini belum memiliki PIN keamanan blast yang terdaftar.' });
   }
@@ -305,7 +327,7 @@ app.post('/api/v1/auth/verify-blast-launch', async (req, reply) => {
     return reply.code(401).send({ error: 'PIN keamanan yang Anda masukkan salah.' });
   }
 
-  // 4. Return kredensial & profil lengkap untuk dikonsumsi Blast Dashboard
+  // 3. Return kredensial & profil lengkap untuk dikonsumsi Blast Dashboard
   return {
     success: true,
     user: {

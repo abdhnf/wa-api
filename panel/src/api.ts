@@ -442,3 +442,9 @@ export async function apiGetBlastLaunchUrl() {
     method: 'POST',
   });
 }
+
+export async function apiRegenerateBlastLaunchUrl() {
+  return await request('/auth/blast-launch/regenerate', {
+    method: 'POST',
+  });
+}
