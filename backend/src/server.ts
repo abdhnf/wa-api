@@ -3,7 +3,7 @@ import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import { z } from 'zod';
 import { createReadStream } from 'node:fs';
-import { mkdir, writeFile, unlink, stat } from 'node:fs/promises';
+import { mkdir, writeFile, unlink, stat, readFile } from 'node:fs/promises';
 import { join, resolve, extname } from 'node:path';
 import { config } from './config.js';
 import { SessionManager } from './session-manager.js';
