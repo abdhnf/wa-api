@@ -15,6 +15,7 @@ import { SettingsPage } from './components/SettingsPage';
 import { UsersPage } from './components/UsersPage';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { BlastAccessModal } from './components/BlastAccessModal';
+import { ThemeToggle } from './components/ThemeToggle';
 import { getStoredAuth, clearAuth, apiGetMyProfile, apiGetUsers, apiRotateApiKey } from './api';
 import { type User, EMPTY_USERS } from './dummyData';
 
@@ -216,7 +217,7 @@ export const App: React.FC = () => {
               title="Lihat API key dan kuota akun"
             >
               <KeyRound className="w-4 h-4 text-pine" />
-              <span className="hidden xl:inline">API Key</span>
+              <span className="hidden sm:inline">API Key</span>
             </button>
 
             <button
@@ -226,40 +227,10 @@ export const App: React.FC = () => {
               title="Akses WhatsApp Blast Dashboard"
             >
               <Send className="w-4 h-4 text-sea" />
-              <span className="hidden xl:inline">Blast App</span>
+              <span className="hidden sm:inline">Blast App</span>
             </button>
 
-            <div className="h-5 w-px bg-line" aria-hidden="true" />
-
-            {/* Profil penanda murni akun (bukan pemantik dialog modal) */}
-            <div
-              className="inline-flex items-center gap-1.5 h-9 pl-1.5 pr-2 text-xs bg-surface-sunken border border-line rounded-md cursor-default select-none"
-              title={`Akun: ${currentUser.name} (${currentUser.role})`}
-            >
-              <span className="grid place-items-center w-6 h-6 rounded bg-pine-wash text-pine-deep font-bold text-xs shrink-0">
-                {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
-              </span>
-              <span className="hidden xl:inline max-w-[110px] truncate text-ink-soft font-medium">{currentUser.name}</span>
-              <span className={`wa-badge ${
-                isAdmin
-                  ? 'wa-badge-admin'
-                  : currentUser.role === 'subscription'
-                    ? 'wa-badge-warning'
-                    : 'wa-badge-neutral'
-              }`}>
-                {currentUser.role}
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="wa-control wa-control-secondary wa-tap w-9 h-9 px-0 text-clay"
-              title="Keluar dari akun"
-              aria-label="Keluar dari akun"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+            <ThemeToggle />
           </div>
         </div>
       </header>
@@ -268,11 +239,11 @@ export const App: React.FC = () => {
         {/* Fixed sidebar (lg and up): dapat diringkas menjadi icon saja */}
         <aside
           className={`wa-sidebar hidden lg:flex lg:flex-col shrink-0 sticky top-14 self-start h-[calc(100vh-3.5rem)] py-3 transition-all duration-200 ${
-            sidebarCollapsed ? 'w-14 items-center px-1' : 'w-56 px-2'
+            sidebarCollapsed ? 'w-14 px-1' : 'w-56 px-2'
           }`}
         >
           <nav className="flex flex-col gap-0.5 w-full" aria-label="Navigasi utama">
-            {!sidebarCollapsed && <div className="wa-nav-group-label pb-1 px-2">Gateway</div>}
+            {!sidebarCollapsed && <div className="wa-nav-group-label pb-1 px-1">Gateway</div>}
             {coreNavItems.map(item => navButton(item, handleSwitchTab, sidebarCollapsed))}
           </nav>
 
@@ -340,18 +311,56 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          <div className="mt-auto w-full pt-4">
+          {/* User info + Logout action di sidebar paling bawah (selaras dengan wa-blast-dashboard) */}
+          <div className="mt-auto w-full pt-3 border-t border-line">
             {sidebarCollapsed ? (
-              <div
-                className="w-10 h-10 rounded-md bg-surface-sunken border border-line flex items-center justify-center mx-auto text-xs font-bold text-ink"
-                title={`${currentUser.name} (${currentUser.email})`}
-              >
-                {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
+              <div className="flex flex-col items-center gap-2">
+                <div
+                  className="w-10 h-10 rounded-md bg-pine-wash text-pine-deep font-bold text-xs flex items-center justify-center border border-pine-line cursor-default"
+                  title={`Akun: ${currentUser.name} (${currentUser.role}) - ${currentUser.email}`}
+                >
+                  {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="w-10 h-10 rounded-md flex items-center justify-center text-clay hover:bg-clay-wash hover:text-clay-deep border border-transparent hover:border-clay-line transition-colors cursor-pointer"
+                  title="Keluar dari akun"
+                  aria-label="Keluar dari akun"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
               </div>
             ) : (
-              <div className="wa-panel-quiet p-2.5">
-                <div className="text-[11px] font-semibold text-ink-soft truncate">{currentUser.name}</div>
-                <div className="text-[11px] text-ink-muted truncate">{currentUser.email}</div>
+              <div className="p-2 rounded-lg bg-surface-sunken border border-line flex items-center gap-2">
+                <div className="grid place-items-center w-8 h-8 rounded-md bg-pine-wash text-pine-deep font-bold text-xs shrink-0 border border-pine-line">
+                  {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-ink truncate leading-tight">
+                    {currentUser.name}
+                  </div>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <span className={`wa-badge capitalize text-[10px] !py-0 !px-1.5 ${
+                      isAdmin
+                        ? 'wa-badge-admin'
+                        : currentUser.role === 'subscription'
+                          ? 'wa-badge-warning'
+                          : 'wa-badge-neutral'
+                    }`}>
+                      {currentUser.role}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="p-1.5 rounded-md text-clay hover:bg-clay-wash hover:text-clay-deep transition-colors shrink-0 cursor-pointer"
+                  title="Keluar dari akun"
+                  aria-label="Keluar dari akun"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
               </div>
             )}
           </div>
@@ -485,7 +494,31 @@ export const App: React.FC = () => {
             </div>
 
             <nav className="p-3 flex flex-col gap-1" aria-label="Navigasi utama mobile">
-              <div className="wa-nav-group-label pb-1 px-1">Menu Utama</div>
+              <div className="wa-nav-group-label pb-1 px-1">Aksi Cepat</div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDrawerOpen(false);
+                  setApiKeyModalOpen(true);
+                }}
+                className="wa-nav-item wa-tap !justify-start w-full"
+              >
+                <KeyRound className="w-4 h-4 shrink-0 text-pine" />
+                <span className="truncate">API Key & Kuota Akun</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDrawerOpen(false);
+                  setBlastModalOpen(true);
+                }}
+                className="wa-nav-item wa-tap !justify-start w-full"
+              >
+                <Send className="w-4 h-4 shrink-0 text-sea" />
+                <span className="truncate">Akses WhatsApp Blast</span>
+              </button>
+
+              <div className="wa-nav-group-label pb-1 px-1 pt-2">Menu Utama</div>
               {coreNavItems.map(item => navButton(item, handleSwitchTab))}
             </nav>
 
@@ -514,25 +547,17 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            <div className="p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] border-t border-line flex flex-col gap-2 mt-auto bg-surface-sunken/40">
+            <div className="p-3 border-t border-line">
               <button
                 type="button"
                 onClick={() => {
                   setDrawerOpen(false);
-                  setApiKeyModalOpen(true);
+                  handleLogout();
                 }}
-                className="wa-control wa-control-secondary h-10 w-full text-xs font-medium justify-center"
-              >
-                <KeyRound className="w-4 h-4 text-pine" />
-                API Key dan Kuota Akun
-              </button>
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="wa-control wa-control-secondary h-10 w-full text-xs font-medium text-clay justify-center"
+                className="wa-control wa-control-secondary w-full justify-center text-clay gap-2 h-10 text-xs font-medium"
               >
                 <LogOut className="w-4 h-4" />
-                Keluar dari Akun
+                <span>Keluar dari Akun</span>
               </button>
             </div>
           </div>

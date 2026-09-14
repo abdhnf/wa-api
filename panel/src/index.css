@@ -69,6 +69,58 @@
   --color-slate-line: #cbd3da;
 }
 
+@custom-variant dark (&:is(.dark *));
+
+/* Dark mode token overrides: warm dark ground (#17150f), surface (#211d13) */
+.dark {
+  color-scheme: dark;
+
+  --color-shell: #17150f;
+  --color-surface: #211d13;
+  --color-surface-alt: #2a2517;
+  --color-surface-sunken: #1c1910;
+  --color-line: #3a3423;
+  --color-line-strong: #54492e;
+
+  --color-ink: #ece7d8;
+  --color-ink-soft: #cfc8b4;
+  --color-ink-muted: #a39a82;
+  --color-ink-faint: #857c66;
+
+  --color-pine: #34a06a;
+  --color-pine-strong: #45b67d;
+  --color-pine-deep: #a9d7bd;
+  --color-pine-soft: #1f7a4d;
+  --color-pine-wash: #122b1e;
+  --color-pine-line: #2c5b43;
+
+  --color-sea: #4d9cbd;
+  --color-sea-deep: #a8cede;
+  --color-sea-soft: #1c6b8a;
+  --color-sea-wash: #12242c;
+  --color-sea-line: #28485a;
+
+  --color-leaf: #5cb060;
+  --color-leaf-deep: #aed5b0;
+  --color-leaf-wash: #14291a;
+  --color-leaf-line: #2e5233;
+
+  --color-honey: #d9a13b;
+  --color-honey-deep: #e6cf94;
+  --color-honey-wash: #2c2208;
+  --color-honey-line: #5c4a17;
+
+  --color-clay: #e06a5c;
+  --color-clay-deep: #eab8b2;
+  --color-clay-wash: #2e1410;
+  --color-clay-line: #642a20;
+
+  --color-slate: #9aa8b4;
+  --color-slate-deep: #c9d3da;
+  --color-slate-wash: #1e2429;
+  --color-slate-line: #3c4a55;
+}
+
 :root {
   color-scheme: light;
 }
@@ -360,6 +412,36 @@ a {
   background-size: 360px auto;
   background-blend-mode: normal;
   opacity: 1;
+}
+
+.dark .wa-chat-canvas {
+  background-color: #0b141a;
+  background-blend-mode: soft-light;
+}
+
+.dark .wa-chat-canvas .bg-\[\#d9fdd3\] {
+  background-color: #005c4b !important;
+  color: #e9edef !important;
+  border-color: #025143 !important;
+}
+
+/* Scrollbar styling for dark mode */
+.dark {
+  scrollbar-color: #3a3423 #17150f;
+}
+
+.dark ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #17150f;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background-color: #3a3423;
+  border-radius: 4px;
 }
 
 .wa-codeblock {
