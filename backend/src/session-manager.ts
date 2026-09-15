@@ -12,7 +12,7 @@ function validatePhoneFormat(phone: string): { valid: boolean; normalized: strin
 }
 
 import { config } from './config.js';
-import { upsertSession, insertMessage, updateMessageStatus, getMessageById, listSessions as dbListSessions, getAntiBanState, saveAntiBanState, getSessionAntiBanSettings, saveSessionAntiBanSettings, getSetting, getUserSetting, getLastSessionForRecipient, resetStuckMessages, getPendingMessages } from './db.js';
+import { upsertSession, insertMessage, updateMessageStatus, getMessageById, listSessions as dbListSessions, getAntiBanState, saveAntiBanState, getSessionAntiBanSettings, saveSessionAntiBanSettings, getSetting, getUserSetting, getLastSessionForRecipient, resetStuckMessages, getPendingMessages, updateSessionProfile } from './db.js';
 import { RateLimiter, WarmUp, TimelockGuard, PresenceChoreographer, ReconnectThrottle, BanRecoveryOrchestrator, ReplyRatioGuard, ContactGraphWarmer, DEFAULT_ANTIBAN_CONFIG, ANTIBAN_PRESETS, type AntiBanPreset, type AntiBanState } from './antiban.js';
 import type { OutboundMessage, SessionInfo, QueueSessionStatus } from './types.js';
 import type { WhatsAppEngine } from './engine/WhatsAppEngine.js';
@@ -54,6 +54,10 @@ export class SessionManager {
     const sessionSettings = getSessionAntiBanSettings(sessionId);
     const activePreset = ANTIBAN_PRESETS[sessionSettings.preset] || ANTIBAN_PRESETS.balanced;
 
+    // Cek profil nomor dari database
+    const dbSession = dbListSessions().find((s: SessionInfo) => s.id === sessionId);
+    const isMature = dbSession ? dbSession.numberProfile !== 'fresh' : true;
+
     if (activePreset && activePreset.rateLimiter) {
       cfg = { ...cfg, ...activePreset.rateLimiter };
     }
@@ -76,7 +80,7 @@ export class SessionManager {
 
     ab = {
       rateLimiter: new RateLimiter(cfg),
-      warmup: new WarmUp(cfg, state?.warmup),
+      warmup: new WarmUp(cfg, state?.warmup, isMature),
       timelock: new TimelockGuard(cfg, state?.timelock),
       presence: new PresenceChoreographer(cfg),
       reconnect: new ReconnectThrottle(cfg),
@@ -517,7 +521,9 @@ export class SessionManager {
     try {
       const ab = this.getAntiBan(sessionId);
       const settings = getSessionAntiBanSettings(sessionId);
+      const dbSession = dbListSessions().find((s: SessionInfo) => s.id === sessionId);
       return {
+        numberProfile: dbSession?.numberProfile || 'mature',
         preset: settings.preset,
         presets: ANTIBAN_PRESETS,
         currentConfig: {
@@ -830,11 +836,36 @@ export class SessionManager {
     });
   }
 
-  async startPairing(id: string, name: string, phone: string, userId?: string) {
+  async updateSessionProfile(sessionId: string, profile: 'fresh' | 'mature') {
+    updateSessionProfile(sessionId, profile);
+    const ab = this.getAntiBan(sessionId);
+    if (profile === 'mature') {
+      ab.warmup.setGraduated(true);
+    } else {
+      ab.warmup.setGraduated(false);
+    }
+    this.persistAntiBan(sessionId);
+    const active = (this.engine as any)['active']?.get(sessionId);
+    if (active) {
+      active.info.numberProfile = profile;
+    }
+    const s = await this.getSession(sessionId);
+    s.numberProfile = profile;
+    upsertSession(s);
+    return s;
+  }
+
+  async startPairing(id: string, name: string, phone: string, userId?: string, numberProfile?: 'fresh' | 'mature') {
     const { qr } = await this.engine.startPairing(id, name, phone);
     const s = await this.engine.getSessionInfo(id);
     if (userId) s.userId = userId;
+    s.numberProfile = numberProfile || 'mature';
     upsertSession(s);
+    if (s.numberProfile === 'fresh') {
+      const ab = this.getAntiBan(id);
+      ab.warmup.setGraduated(false);
+      this.persistAntiBan(id);
+    }
     return { qr, session: s };
   }
 

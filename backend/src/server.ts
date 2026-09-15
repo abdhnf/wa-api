@@ -619,21 +619,29 @@ app.post('/api/v1/sessions/:id/antiban/reset-cooldown', { preHandler: requireAut
 
 app.post('/api/v1/sessions', { preHandler: requireAuth }, async (req, reply) => {
   const user = req.apiKeyUser!;
-  const body = (req.body || {}) as { name?: string; phone?: string };
+  const body = (req.body || {}) as { name?: string; phone?: string; numberProfile?: 'fresh' | 'mature' };
   const id = `sess-${Date.now().toString(36)}`;
-  const { qr, session } = await manager.startPairing(id, body.name || 'New Session', body.phone || '62xxx', user.id);
+  const { qr, session } = await manager.startPairing(id, body.name || 'New Session', body.phone || '62xxx', user.id, body.numberProfile);
   return reply.code(201).send({ success: true, sessionId: id, qr, session });
 });
 
-// Rename session (ubah nama tampilan tanpa putus koneksi)
+// Rename atau ganti profile session (tanpa putus koneksi)
 app.patch('/api/v1/sessions/:id', { preHandler: requireAuth }, async (req, reply) => {
   const { id } = req.params as { id: string };
-  const body = (req.body || {}) as { name?: string };
-  if (!body.name || !body.name.trim()) {
-    return reply.code(400).send({ error: 'Nama session tidak boleh kosong' });
+  const body = (req.body || {}) as { name?: string; numberProfile?: 'fresh' | 'mature' };
+  
+  if (!body.name && !body.numberProfile) {
+    return reply.code(400).send({ error: 'Parameter name atau numberProfile harus disertakan' });
   }
+  
   try {
-    const session = await manager.renameSession(id, body.name.trim());
+    let session;
+    if (body.name && body.name.trim()) {
+      session = await manager.renameSession(id, body.name.trim());
+    }
+    if (body.numberProfile && (body.numberProfile === 'fresh' || body.numberProfile === 'mature')) {
+      session = await manager.updateSessionProfile(id, body.numberProfile);
+    }
     return { success: true, session };
   } catch (err: any) {
     return reply.code(404).send({ error: err.message || 'Session tidak ditemukan' });

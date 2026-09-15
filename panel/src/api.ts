@@ -112,10 +112,17 @@ export async function apiGetSession(id: string) {
   return res?.session ?? res;
 }
 
-export async function apiCreateSession(name: string, phone?: string) {
+export async function apiCreateSession(name: string, phone?: string, numberProfile: 'fresh' | 'mature' = 'mature') {
   return request('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ name, phone }),
+    body: JSON.stringify({ name, phone, numberProfile }),
+  });
+}
+
+export async function apiUpdateSessionProfile(id: string, numberProfile: 'fresh' | 'mature') {
+  return request(`/sessions/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ numberProfile }),
   });
 }
 

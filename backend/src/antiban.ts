@@ -301,7 +301,7 @@ export class WarmUp {
   private lastActiveAt: number;
   private dailyCounts: number[];
   private graduated: boolean;
-  constructor(private cfg: AntiBanConfig, state?: AntiBanState['warmup']) {
+  constructor(private cfg: AntiBanConfig, state?: AntiBanState['warmup'], initialGraduated = false) {
     if (state) {
       this.startedAt = state.startedAt;
       this.lastActiveAt = state.lastActiveAt;
@@ -311,8 +311,12 @@ export class WarmUp {
       this.startedAt = Date.now();
       this.lastActiveAt = Date.now();
       this.dailyCounts = [];
-      this.graduated = false;
+      this.graduated = initialGraduated;
     }
+  }
+
+  setGraduated(graduated: boolean): void {
+    this.graduated = graduated;
   }
 
   private getCurrentDay(): number {

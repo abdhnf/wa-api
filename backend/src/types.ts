@@ -21,6 +21,7 @@ export interface SessionInfo {
   warmupDay: number;
   messagesSentToday: number;
   deliveryRate: number;
+  numberProfile?: 'fresh' | 'mature';
   metrics: SessionMetrics;
   userId?: string;
   owner?: { id: string; name: string; email: string };

@@ -124,6 +124,7 @@ ensureColumn('messages', 'batch_id', 'TEXT');
 ensureColumn('sessions', 'antiban_state', 'TEXT');
 ensureColumn('sessions', 'antiban_preset', "TEXT DEFAULT 'balanced'");
 ensureColumn('sessions', 'antiban_config', 'TEXT');
+ensureColumn('sessions', 'number_profile', "TEXT DEFAULT 'mature'");
 ensureColumn('users', 'google_id', 'TEXT');
 ensureColumn('users', 'auth_provider', "TEXT DEFAULT 'local'");
 ensureColumn('users', 'avatar_url', 'TEXT');
@@ -410,14 +411,17 @@ export function incrementUsage(userId: string): void {
 // ---------- Sessions ----------
 export function upsertSession(s: SessionInfo, defaultUserId = 'usr_c26f74d6'): void {
   const uid = s.userId || defaultUserId;
+  const profile = s.numberProfile || 'mature';
   db.prepare(
-    `INSERT INTO sessions (id, name, phone, status, risk_score, warmup_day, messages_sent_today, delivery_rate, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO sessions (id, name, phone, status, risk_score, warmup_day, messages_sent_today, delivery_rate, user_id, number_profile)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        name=excluded.name, phone=excluded.phone, status=excluded.status,
        risk_score=excluded.risk_score, warmup_day=excluded.warmup_day,
-       messages_sent_today=excluded.messages_sent_today, delivery_rate=excluded.delivery_rate, user_id=COALESCE(sessions.user_id, excluded.user_id)`
-  ).run(s.id, s.name, s.phone, s.status, s.riskScore, s.warmupDay, s.messagesSentToday, s.deliveryRate, uid);
+       messages_sent_today=excluded.messages_sent_today, delivery_rate=excluded.delivery_rate,
+       number_profile=COALESCE(excluded.number_profile, sessions.number_profile, 'mature'),
+       user_id=COALESCE(sessions.user_id, excluded.user_id)`
+  ).run(s.id, s.name, s.phone, s.status, s.riskScore, s.warmupDay, s.messagesSentToday, s.deliveryRate, uid, profile);
 }
 
 export function listSessions(filterUserId?: string): SessionInfo[] {
@@ -474,6 +478,7 @@ export function listSessions(filterUserId?: string): SessionInfo[] {
       status: r.status,
       riskScore: r.risk_score || 0,
       warmupDay: r.warmup_day || 1,
+      numberProfile: (r.number_profile === 'fresh' ? 'fresh' : 'mature') as 'fresh' | 'mature',
       messagesSentToday,
       deliveryRate,
       metrics: {
@@ -487,6 +492,10 @@ export function listSessions(filterUserId?: string): SessionInfo[] {
       },
     };
   });
+}
+
+export function updateSessionProfile(id: string, profile: 'fresh' | 'mature'): void {
+  db.prepare('UPDATE sessions SET number_profile = ? WHERE id = ?').run(profile, id);
 }
 
 // ---------- Messages ----------

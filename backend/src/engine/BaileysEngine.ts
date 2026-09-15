@@ -346,6 +346,7 @@ export class BaileysEngine {
       ...s.info,
       userId: dbSession?.userId ?? s.info.userId,
       owner: dbSession?.owner ?? s.info.owner,
+      numberProfile: dbSession?.numberProfile ?? s.info.numberProfile,
       messagesSentToday: dbSession?.messagesSentToday ?? s.info.messagesSentToday,
       deliveryRate: dbSession?.deliveryRate ?? s.info.deliveryRate,
       metrics: mergedMetrics,

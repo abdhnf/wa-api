@@ -6,7 +6,7 @@ import {
  ArrowUpRight, ShieldCheck, UserCheck, Radio, Sparkles, Settings2, HelpCircle, ChevronDown, ChevronUp, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { type QueueItem, type Session, EMPTY_SESSIONS, EMPTY_QUEUE } from '../dummyData';
-import { apiGetSessions, apiGetSessionMessages, apiSendBulk, apiGetAntiBan, apiUpdateAntiBan, apiResetReplyRatioCooldown, apiRetryMessage, apiGetQueueStatus, apiPauseQueue, apiResumeQueue } from '../api';
+import { apiGetSessions, apiGetSessionMessages, apiSendBulk, apiGetAntiBan, apiUpdateAntiBan, apiResetReplyRatioCooldown, apiRetryMessage, apiGetQueueStatus, apiPauseQueue, apiResumeQueue, apiUpdateSessionProfile } from '../api';
 import { Toast } from './Toast';
 import { AutoRotateSettings } from './AutoRotateSettings';
 
@@ -623,16 +623,31 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  {/* 1. WarmUp */}
  <div className="p-3 bg-surface-sunken border border-line rounded-md space-y-1 group relative">
  <div className="flex items-center justify-between">
- <span className="text-ink-muted text-[11px] font-medium flex items-center gap-1">
- 7-Day WarmUp
+ <span className="text-ink-muted text-[11px] font-medium flex items-center gap-1.5 flex-wrap">
+   <span>7-Day WarmUp</span>
+   {antiBanData?.numberProfile === 'fresh' || selectedSession?.numberProfile === 'fresh' ? (
+     <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-honey-wash text-honey-deep border border-honey-line/60">
+       🟡 Nomor Baru (Fresh)
+     </span>
+   ) : (
+     <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-pine-wash text-pine border border-pine-line/60">
+       🟢 Nomor Lama (Mature)
+     </span>
+   )}
  </span>
  <span className="text-[10px] text-pine font-mono">Layer 1</span>
  </div>
  <div className="font-mono text-pine font-semibold text-sm">
- {antiBanData?.warmup ? `Hari ke-${antiBanData.warmup.day}/7 (${antiBanData.warmup.todaySent}/${antiBanData.warmup.todayLimit})` : 'Memuat...'}
+ {antiBanData?.warmup ? (
+   antiBanData.warmup.phase === 'graduated' || antiBanData?.numberProfile === 'mature'
+     ? 'Graduated (Uncapped ∞)'
+     : `Hari ke-${antiBanData.warmup.day}/7 (${antiBanData.warmup.todaySent}/${antiBanData.warmup.todayLimit})`
+ ) : 'Memuat...'}
  </div>
  <p className="text-[10px] text-ink-faint leading-relaxed">
- Membatasi volume kirim secara eksponensial di 7 hari awal agar nomor baru tidak langsung ditandai sebagai bot spammer.
+ {antiBanData?.numberProfile === 'mature' || antiBanData?.warmup?.phase === 'graduated'
+   ? 'Nomor matang / mature. Batas kuota warm-up dinonaktifkan (siap broadcast volume penuh).'
+   : 'Membatasi volume kirim secara bertahap di 7 hari awal agar nomor baru tidak langsung kena banned.'}
  </p>
  </div>
 

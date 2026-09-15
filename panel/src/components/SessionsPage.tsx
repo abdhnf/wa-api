@@ -13,7 +13,8 @@ import {
  apiDeleteSession, 
  apiGetSession, 
  apiRenameSession,
- apiRepairSession
+ apiRepairSession,
+ apiUpdateSessionProfile
 } from '../api';
 import { Toast } from './Toast';
 
@@ -27,6 +28,7 @@ export const SessionsPage: React.FC = () => {
  const [pairingSessionId, setPairingSessionId] = useState<string | null>(null);
  const [newSessionName, setNewSessionName] = useState('Nomor Baru');
  const [newSessionPhone, setNewSessionPhone] = useState('628');
+ const [newSessionProfile, setNewSessionProfile] = useState<'fresh' | 'mature'>('mature');
  const [pairingLoading, setPairingLoading] = useState(false);
  const [qrCountdown, setQrCountdown] = useState(60);
  const [qrChecking, setQrChecking] = useState(false);
@@ -79,6 +81,7 @@ export const SessionsPage: React.FC = () => {
  status: s.status,
  riskScore: s.riskScore || 0,
  warmupDay: s.warmupDay || 1,
+ numberProfile: s.numberProfile || 'mature',
  messagesSentToday: s.messagesSentToday || 0,
  deliveryRate: s.deliveryRate || 100,
  metrics: {
@@ -142,7 +145,7 @@ export const SessionsPage: React.FC = () => {
  setQrChecking(false);
  setQrCountdown(60);
  try {
- const res = await apiCreateSession(newSessionName, newSessionPhone);
+ const res = await apiCreateSession(newSessionName, newSessionPhone, newSessionProfile);
  const sessionId = res?.sessionId;
  if (!sessionId) throw new Error('Session ID tidak ditemukan di respons');
  setPairingSessionId(sessionId);
@@ -493,6 +496,37 @@ export const SessionsPage: React.FC = () => {
  <span className="font-mono font-bold text-pine">{s.deliveryRate}%</span>
  </div>
  </div>
+
+ <div className="mt-2 flex items-center justify-between text-[10px]">
+ <span className="text-ink-faint">Profil Nomor:</span>
+ <button
+   type="button"
+   onClick={async (e) => {
+     e.stopPropagation();
+     const nextProf = s.numberProfile === 'fresh' ? 'mature' : 'fresh';
+     // Optimistic UI update agar langsung terlihat berubah tanpa jeda
+     setSessions((prev) =>
+       prev.map((item) => (item.id === s.id ? { ...item, numberProfile: nextProf } : item))
+     );
+     try {
+       await apiUpdateSessionProfile(s.id, nextProf);
+       showToast(`Profil ${s.name} diubah ke ${nextProf === 'mature' ? 'Nomor Matang (Uncapped)' : 'Nomor Fresh'}`, 'success');
+       fetchSessions(false);
+     } catch (err: any) {
+       showToast(`Gagal update profil: ${err.message}`, 'error');
+       fetchSessions(false);
+     }
+   }}
+   className={`px-2 py-0.5 rounded-full font-medium transition cursor-pointer hover:opacity-85 ${
+     s.numberProfile === 'fresh'
+       ? 'bg-honey-wash text-honey-deep border border-honey-line/60'
+       : 'bg-pine-wash text-pine border border-pine-line/60'
+   }`}
+   title="Klik untuk switch profil (Fresh <-> Mature)"
+ >
+   {s.numberProfile === 'fresh' ? `🟡 Fresh (Warm-up H-${s.warmupDay || 1}) ⇄` : '🟢 Mature (Uncapped) ⇄'}
+ </button>
+ </div>
  </div>
 
  {/* Actions Bar Per Card */}
@@ -677,6 +711,44 @@ export const SessionsPage: React.FC = () => {
  className="w-full bg-surface-sunken border border-line rounded-md px-3 py-2 text-xs text-ink focus:outline-none focus:border-pine"
  placeholder="628xxxxxxxxxx"
  />
+ </div>
+ <div>
+ <label className="text-[11px] font-semibold text-ink-muted block mb-1">Profil Nomor & Anti-Ban Warm-up</label>
+ <div className="grid grid-cols-2 gap-2">
+   <button
+     type="button"
+     onClick={() => setNewSessionProfile('mature')}
+     className={`p-2.5 rounded-md border text-left transition flex flex-col justify-between ${
+       newSessionProfile === 'mature'
+         ? 'border-pine bg-pine-wash/40 text-pine-deep'
+         : 'border-line bg-surface-sunken text-ink-muted hover:text-ink'
+     }`}
+   >
+     <span className="text-xs font-bold flex items-center gap-1.5">
+       🟢 Nomor Matang
+     </span>
+     <span className="text-[10px] text-ink-faint mt-1 leading-snug">
+       Nomor lama / sering chat. Tanpa pembatasan warm-up harian.
+     </span>
+   </button>
+
+   <button
+     type="button"
+     onClick={() => setNewSessionProfile('fresh')}
+     className={`p-2.5 rounded-md border text-left transition flex flex-col justify-between ${
+       newSessionProfile === 'fresh'
+         ? 'border-honey bg-honey-wash/50 text-honey-deep'
+         : 'border-line bg-surface-sunken text-ink-muted hover:text-ink'
+     }`}
+   >
+     <span className="text-xs font-bold flex items-center gap-1.5">
+       🟡 Nomor Fresh
+     </span>
+     <span className="text-[10px] text-ink-faint mt-1 leading-snug">
+       Nomor baru beli / perdana. Eskalasi kuota bertahap 7 hari.
+     </span>
+   </button>
+ </div>
  </div>
  <button
  onClick={handleStartPairing}

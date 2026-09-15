@@ -17,6 +17,7 @@ export interface Session {
   status: 'connected' | 'connecting' | 'disconnected';
   riskScore: number; // 0-100 (baileys-antiban)
   warmupDay: number; // 1-7
+  numberProfile?: 'fresh' | 'mature';
   messagesSentToday: number;
   deliveryRate: number; // e.g. 98.5%
   metrics: SessionMetrics;
