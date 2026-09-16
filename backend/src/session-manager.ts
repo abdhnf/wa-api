@@ -752,8 +752,11 @@ export class SessionManager {
 
           let totalDelay = delayCheck.delayMs;
           const distraction = ab.presence.shouldPauseForDistraction();
-          const reconnectMult = ab.reconnect.multiplier;
-          totalDelay = Math.round((totalDelay + distraction.durationMs) / reconnectMult);
+          const reconnectMult = Math.max(0.2, ab.reconnect.multiplier || 1);
+          // Distraksi manusiawi tidak boleh dibagi dengan faktor reconnect agar tidak meledak menjadi jam-jaman
+          totalDelay = Math.round(totalDelay / reconnectMult) + (distraction.pause ? distraction.durationMs : 0);
+          // Safety Cap: pacing blast per pesan dibatasi maksimal 60 detik agar antrean tidak tersendat berjam-jam
+          totalDelay = Math.min(totalDelay, 60_000);
 
           msg.jitterDelayMs = totalDelay;
           if (totalDelay > 0) {
