@@ -29,6 +29,9 @@ export class SessionManager {
   private pausedSessions = new Map<string, { isPaused: boolean; reason?: string }>();
   private pausedBatches = new Map<string, { isPaused: boolean; reason?: string }>();
   private lastServedBatchPerSession = new Map<string, string>();
+  /** Timer auto-resume per sesi: antrean yang dijeda otomatis dibuka lagi saat blokir lewat. */
+  private autoResumeTimers = new Map<string, NodeJS.Timeout>();
+  private autoResumeWaitMs = new Map<string, number>();
   private processing = new Set<string>();
   private antiban = new Map<string, {
     rateLimiter: RateLimiter;
@@ -205,6 +208,51 @@ export class SessionManager {
     return pending.length;
   }
 
+  /**
+   * Kembalikan pesan ke depan antrean normal supaya tidak hilang dan tidak diulang.
+   * Dipakai semua jalur guard yang memblokir sementara (rate limit, timelock, dll).
+   */
+  private holdMessageAtFront(sessionId: string, msg: OutboundMessage): void {
+    if (!this.normalQueues.has(sessionId)) this.normalQueues.set(sessionId, []);
+    this.normalQueues.get(sessionId)!.unshift(msg);
+  }
+
+  /**
+   * Jadwalkan pembukaan kembali antrean sesi setelah masa blokir lewat.
+   *
+   * Tanpa ini, `pauseQueue()` bersifat permanen: satu-satunya pemanggil `resumeQueue()`
+   * adalah endpoint manual, sehingga antrean berhenti sampai ada manusia yang klik Resume.
+   * Itu membuat guard yang "menahan pesan" (bukan membuang) justru memacetkan blast.
+   *
+   * @param retryInMs sisa waktu blokir; dijepit ke [5s, 1 jam] dan diberi margin 5%.
+   */
+  private scheduleAutoResume(sessionId: string, retryInMs: number): void {
+    const MIN_WAIT = 5_000;
+    const MAX_WAIT = 60 * 60 * 1000; // 1 jam
+    const raw = Number.isFinite(retryInMs) && retryInMs > 0 ? retryInMs : MIN_WAIT;
+    const waitMs = Math.min(MAX_WAIT, Math.max(MIN_WAIT, Math.ceil(raw * 1.05)));
+
+    const existing = this.autoResumeTimers.get(sessionId);
+    // Jangan tunda resume yang sudah terjadwal lebih cepat.
+    if (existing && this.autoResumeWaitMs.get(sessionId)! <= waitMs) return;
+    if (existing) clearTimeout(existing);
+
+    this.autoResumeWaitMs.set(sessionId, waitMs);
+    const timer = setTimeout(() => {
+      this.autoResumeTimers.delete(sessionId);
+      this.autoResumeWaitMs.delete(sessionId);
+      const pauseInfo = this.pausedSessions.get(sessionId);
+      if (!pauseInfo?.isPaused) return;
+      console.log(`[session:${sessionId}] ⏱️ Auto-resume: masa blokir selesai (${Math.round(waitMs / 1000)}s), antrean dilanjutkan.`);
+      this.resumeQueue(sessionId);
+    }, waitMs);
+
+    // Jangan menahan proses Node tetap hidup hanya karena timer ini.
+    if (typeof timer.unref === 'function') timer.unref();
+    this.autoResumeTimers.set(sessionId, timer);
+    console.log(`[session:${sessionId}] ⏱️ Auto-resume dijadwalkan dalam ${Math.round(waitMs / 1000)}s.`);
+  }
+
   /** Pause antrean normal (blast) per sesi secara manual / otomatis */
   pauseQueue(sessionId: string, reason = 'Dijeda oleh pengguna'): { success: boolean; status: QueueSessionStatus } {
     this.pausedSessions.set(sessionId, { isPaused: true, reason });
@@ -214,6 +262,12 @@ export class SessionManager {
 
   /** Resume antrean blast yang tertahan */
   resumeQueue(sessionId: string): { success: boolean; status: QueueSessionStatus } {
+    const timer = this.autoResumeTimers.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.autoResumeTimers.delete(sessionId);
+      this.autoResumeWaitMs.delete(sessionId);
+    }
     this.pausedSessions.set(sessionId, { isPaused: false, reason: undefined });
     console.log(`[session:${sessionId}] ▶️ Antrean blast di-resume`);
     void this.processQueue(sessionId);
@@ -266,6 +320,7 @@ export class SessionManager {
       pendingCount,
       priorityPendingCount,
       vipPendingCount: priorityPendingCount,
+      autoResumeInMs: this.autoResumeWaitMs.get(sessionId) ?? null,
     };
   }
 
@@ -680,38 +735,47 @@ export class SessionManager {
         const content = msg.text || msg.caption || '';
 
         // 4. Pengecekan Anti-Ban
+        //
+        // Guard di bawah ini bersifat SEMENTARA: pemblokirannya akan hilang sendiri
+        // (timelock expired, cooldown reply-ratio habis, handshake selesai). Karena itu
+        // pesan TIDAK ditandai 'failed' (itu permanen dan menghilangkan pesan dari
+        // antrean), melainkan dikembalikan ke depan antrean lalu antrean dijeda
+        // sampai waktu blokirnya lewat — lihat scheduleAutoResume().
         if (!isHighPriority) {
-          // Jalur Blast Normal: wajib patuhi cooldown ban recovery & timelock 463
+          let blocked: { reason: string; retryInMs: number } | null = null;
+
           const recoveryDecision = ab.recovery.beforeSend();
           if (!recoveryDecision.allowed) {
-            console.warn(`[session:${sessionId}] 🚑 ${recoveryDecision.reason}`);
-            updateMessageStatus(msg.id, 'failed', recoveryDecision.reason);
-            msg.status = 'failed';
-            continue;
+            blocked = { reason: `🚑 ${recoveryDecision.reason}`, retryInMs: ab.recovery.remainingMs() };
           }
 
-          const timelockDecision = ab.timelock.canSend(jid);
-          if (!timelockDecision.allowed) {
-            console.warn(`[session:${sessionId}] ⛔ ${timelockDecision.reason}`);
-            updateMessageStatus(msg.id, 'failed', timelockDecision.reason);
-            msg.status = 'failed';
-            continue;
+          if (!blocked) {
+            const timelockDecision = ab.timelock.canSend(jid);
+            if (!timelockDecision.allowed) {
+              blocked = { reason: `⛔ ${timelockDecision.reason}`, retryInMs: ab.timelock.remainingMs() };
+            }
           }
 
-          const rr = ab.replyRatio.beforeSend(jid);
-          if (!rr.allowed) {
-            console.warn(`[session:${sessionId}] 📉 ${rr.reason}`);
-            updateMessageStatus(msg.id, 'failed', rr.reason);
-            msg.status = 'failed';
-            continue;
+          if (!blocked) {
+            const rr = ab.replyRatio.beforeSend(jid);
+            if (!rr.allowed) {
+              blocked = { reason: `📉 ${rr.reason}`, retryInMs: ab.replyRatio.remainingMs(jid) };
+            }
           }
 
-          const cg = ab.contactGraph.canMessage(jid);
-          if (!cg.allowed) {
-            console.warn(`[session:${sessionId}] 🕸️ ${cg.reason}`);
-            updateMessageStatus(msg.id, 'failed', cg.reason);
-            msg.status = 'failed';
-            continue;
+          if (!blocked) {
+            const cg = ab.contactGraph.canMessage(jid);
+            if (!cg.allowed) {
+              blocked = { reason: `🕸️ ${cg.reason}`, retryInMs: ab.contactGraph.remainingMs(jid) };
+            }
+          }
+
+          if (blocked) {
+            console.warn(`[session:${sessionId}] ${blocked.reason} — pesan ditahan, antrean dijeda sementara.`);
+            this.holdMessageAtFront(sessionId, msg);
+            this.pauseQueue(sessionId, blocked.reason);
+            this.scheduleAutoResume(sessionId, blocked.retryInMs);
+            break;
           }
         }
 
@@ -742,11 +806,11 @@ export class SessionManager {
           if (!delayCheck.allowed) {
             console.warn(`[session:${sessionId}] ⏸️ Batas blast tercapai (${delayCheck.reason}). Auto-pause antrean.`);
             // Kembalikan pesan ke depan antrean normal agar TIDAK GAGAL dan TIDAK HILANG!
-            if (!this.normalQueues.has(sessionId)) this.normalQueues.set(sessionId, []);
-            this.normalQueues.get(sessionId)!.unshift(msg);
+            this.holdMessageAtFront(sessionId, msg);
 
-            // Set status sesi ke auto-pause
+            // Set status sesi ke auto-pause, lalu jadwalkan resume otomatis
             this.pauseQueue(sessionId, delayCheck.reason || 'Batas blast harian tercapai');
+            this.scheduleAutoResume(sessionId, delayCheck.delayMs > 0 ? delayCheck.delayMs : 60_000);
             break;
           }
 
@@ -791,7 +855,11 @@ export class SessionManager {
           ab.warmup.record();
           ab.replyRatio.recordSent(jid);
           ab.contactGraph.recordSent(jid);
-          ab.reconnect.onReconnect();
+          // CATATAN: jangan panggil ab.reconnect.onReconnect() di sini.
+          // ReconnectThrottle menurunkan kecepatan ke 10% selama 60s setelah reconnect;
+          // memanggilnya tiap pesan sukses membuat multiplier selalu ~0.1 sehingga
+          // SETIAP delay pacing terkalikan 10x. Throttle hanya boleh dipicu oleh
+          // socket reconnect sungguhan (server.ts -> engine.onReconnectCallback).
           this.persistAntiBan(sessionId);
           console.log(`[session:${sessionId}] ✉️ [${isHighPriority ? 'PRIORITY-HIGH' : 'BLAST'}] Pesan ${msg.id} terkirim (messageId: ${messageId})`);
         } catch (err: any) {

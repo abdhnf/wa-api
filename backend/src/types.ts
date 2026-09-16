@@ -69,6 +69,8 @@ export interface QueueSessionStatus {
   pendingCount: number;
   priorityPendingCount: number;
   vipPendingCount?: number; // Deprecated alias untuk backward compatibility
+  /** Sisa waktu (ms) sampai antrean dijeda otomatis dibuka kembali. null = tidak ada jadwal. */
+  autoResumeInMs?: number | null;
 }
 
 export interface UserRecord {

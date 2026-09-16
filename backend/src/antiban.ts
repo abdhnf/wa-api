@@ -40,6 +40,8 @@ export interface AntiBanConfig {
   newChatDelayMs: number;
   maxIdenticalMessages: number;
   burstAllowance: number;
+  /** Jeda distraksi manusiawi 5-20 menit. Wajib false untuk jalur blast/broadcast. */
+  distraction: boolean;
   warmupDays: number;
   day1Limit: number;
   growthFactor: number;
@@ -58,6 +60,7 @@ export const DEFAULT_ANTIBAN_CONFIG: AntiBanConfig = {
   newChatDelayMs: 3000,
   maxIdenticalMessages: 3,
   burstAllowance: 3,
+  distraction: true,
   warmupDays: 7,
   day1Limit: 20,
   growthFactor: 1.8,
@@ -86,6 +89,7 @@ export const ANTIBAN_PRESETS: Record<string, AntiBanPreset> = {
       maxPerMinute: 5,
       maxPerHour: 100,
       maxIdenticalMessages: 2,
+      distraction: false,
     },
     replyRatio: {
       enabled: true,
@@ -104,6 +108,7 @@ export const ANTIBAN_PRESETS: Record<string, AntiBanPreset> = {
       maxPerMinute: 8,
       maxPerHour: 200,
       maxIdenticalMessages: 3,
+      distraction: true,
     },
     replyRatio: {
       enabled: true,
@@ -122,6 +127,7 @@ export const ANTIBAN_PRESETS: Record<string, AntiBanPreset> = {
       maxPerMinute: 10,
       maxPerHour: 300,
       maxIdenticalMessages: 10,
+      distraction: false,
     },
     replyRatio: {
       enabled: false,
@@ -151,6 +157,24 @@ function hashContent(content: string): string {
   return h.toString(36);
 }
 
+/**
+ * Normalisasi konten sebelum hashing untuk guard anti-spam konten identik.
+ *
+ * Tanpa ini guard `maxIdenticalMessages` praktis tidak pernah aktif pada blast:
+ * dashboard me-render variabel per kontak (mis. baris sapaan "Yth. <nama>"),
+ * sehingga setiap pesan menghasilkan hash berbeda walau isi pesannya sama.
+ * Hasilnya 52 pesan identik lolos tanpa terdeteksi.
+ *
+ * Heuristik ini menyamarkan baris personalisasi yang bervariasi per penerima.
+ * Pesan tanpa baris sapaan tidak terpengaruh (hash tidak berubah).
+ */
+export function normalizeContentForHash(content: string): string {
+  return content
+    .replace(/^[ \t]*(Yth|Kepada|Dear|Halo|Hai|Hi)[^\n]*/gim, '$1 <PENERIMA>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export class RateLimiter {
   private messages: { timestamp: number; recipient: string; contentHash: string }[] = [];
   private identicalCount = new Map<string, { count: number; firstSeen: number; lastSeen: number }>();
@@ -163,7 +187,7 @@ export class RateLimiter {
   getDelay(recipient: string, content: string): number {
     const now = Date.now();
     this.cleanup(now);
-    const contentHash = hashContent(content);
+    const contentHash = hashContent(normalizeContentForHash(content));
 
     if (this.messages.filter(m => now - m.timestamp < MS.DAY).length >= this.cfg.maxPerDay) return -1;
 
@@ -207,7 +231,7 @@ export class RateLimiter {
   record(recipient: string, content: string): void {
     const now = Date.now();
     if (now - this.lastMessageTime > 30_000) this.burstCount = 0;
-    const contentHash = hashContent(content);
+    const contentHash = hashContent(normalizeContentForHash(content));
     this.messages.push({ timestamp: now, recipient, contentHash });
     this.knownChats.add(recipient);
     this.lastMessageTime = now;
@@ -224,7 +248,7 @@ export class RateLimiter {
   getDelayReason(recipient: string, content: string): { allowed: boolean; delayMs: number; reason?: string } {
     const now = Date.now();
     this.cleanup(now);
-    const contentHash = hashContent(content);
+    const contentHash = hashContent(normalizeContentForHash(content));
 
     if (this.messages.filter(m => now - m.timestamp < MS.DAY).length >= this.cfg.maxPerDay) {
       return { allowed: false, delayMs: -1, reason: 'Kuota batas harian sesi tercapai' };
@@ -439,6 +463,13 @@ export class TimelockGuard {
     this.expiresAt = null;
   }
 
+  /** Sisa waktu timelock dalam ms — dipakai penjadwal auto-resume antrean. */
+  remainingMs(): number {
+    if (!this.isActive) return 0;
+    if (!this.expiresAt) return 60_000;
+    return Math.max(0, this.expiresAt + this.cfg.resumeBufferMs - Date.now());
+  }
+
   getState() {
     return { isActive: this.isActive, expiresAt: this.expiresAt, errorCount: this.errorCount, knownChats: [...this.knownChats] };
   }
@@ -493,8 +524,9 @@ export class PresenceChoreographer {
     return plan;
   }
 
-  /** 5% chance distraction pause 5-20 min */
+  /** 5% chance distraction pause 5-20 min. Dimatikan bila cfg.distraction = false. */
   shouldPauseForDistraction(): { pause: boolean; durationMs: number } {
+    if (this.cfg.distraction === false) return { pause: false, durationMs: 0 };
     if (Math.random() < 0.05) {
       return { pause: true, durationMs: gaussianJitter(300_000, 1_200_000) };
     }
@@ -645,6 +677,14 @@ export class BanRecoveryOrchestrator {
     return { allowed: true, speedMultiplier: Math.max(0.02, speedMultiplier) };
   }
 
+  /** Sisa cooldown ban recovery (ms). 0 = tidak dalam cooldown. */
+  remainingMs(): number {
+    if (this.state.currentPhase === 'normal') return 0;
+    const cooldownMs = this.cooldownFor(this.state.banType);
+    const elapsed = Date.now() - (this.state.phaseStartAt ?? 0);
+    return Math.max(0, cooldownMs - elapsed);
+  }
+
   /** Sembuh total — reset ke normal */
   markRecovered() {
     this.state = { currentPhase: 'normal', recoveryStartedAt: null, phaseStartAt: null, banType: null, violations: 0 };
@@ -769,6 +809,13 @@ export class ReplyRatioGuard {
     }
 
     return { allowed: true };
+  }
+
+  /** Sisa cooldown reply-ratio untuk sebuah kontak (ms). 0 = tidak diblokir. */
+  remainingMs(jid: string): number {
+    const record = this.contacts.get(jid);
+    if (!record?.cooledUntil) return 0;
+    return Math.max(0, record.cooledUntil - Date.now());
   }
 
   recordSent(jid: string): void {
@@ -918,6 +965,26 @@ export class ContactGraphWarmer {
 
   markGroupJoined(groupJid: string): void {
     this.groups.set(groupJid, { joinedAt: Date.now() });
+  }
+
+  /** Sisa jeda handshake/lurk untuk sebuah kontak (ms). 0 = boleh kirim. */
+  remainingMs(jid: string): number {
+    // Guard dimatikan -> tidak pernah memblokir, jangan jadwalkan auto-resume.
+    if (!this.config.enabled) return 0;
+
+    if (this.isGroup(jid)) {
+      const group = this.groups.get(jid);
+      if (!group) return this.config.groupLurkPeriodMs;
+      return Math.max(0, group.joinedAt + this.config.groupLurkPeriodMs - Date.now());
+    }
+    const record = this.contacts.get(jid);
+    // Belum ada record: canMessage() belum sempat mendaftarkannya sebagai
+    // 'handshake_sent'. Tetap laporkan jeda handshake penuh supaya pemanggil
+    // tidak salah menjadwalkan auto-resume 5 detik untuk blokir 1 jam.
+    if (!record) return this.config.handshakeMinDelayMs;
+    if (record.state === 'known') return 0;
+    if (record.state === 'stranger') return this.config.handshakeMinDelayMs;
+    return Math.max(0, (record.handshakeSentAt ?? 0) + this.config.handshakeMinDelayMs - Date.now());
   }
 
   recordSent(jid: string): void {
