@@ -279,55 +279,58 @@ export const AutoRotateSettings: React.FC<AutoRotateSettingsProps> = ({ showToas
  {roster.map((s: any) => {
  const isIncluded = poolSessions.length === 0 || poolSessions.includes(s.id);
  const warmup = s.warmupStatus;
- const limitReached = warmup ? warmup.todaySent >= warmup.todayLimit : false;
+ const isUnlimited = warmup ? (warmup.todayLimit === -1 || warmup.phase === 'graduated') : false;
+ const limitReached = warmup && !isUnlimited ? warmup.todaySent >= warmup.todayLimit : false;
 
  return (
- <tr key={s.id} className={`transition hover:bg-surface-alt/40 ${isIncluded ? '' : 'opacity-50'}`}>
- <td className="px-4 py-3 text-center">
- <input
- type="checkbox"
- checked={isIncluded}
- onChange={() => handleTogglePool(s.id)}
- className="rounded border-line-strong text-pine focus:ring-pine w-4 h-4 cursor-pointer"
- />
- </td>
- <td className="px-4 py-3 font-semibold text-ink">
- <div>{s.name}</div>
- <div className="text-[10px] text-ink-faint font-mono">{s.id}</div>
- </td>
- <td className="px-4 py-3 font-mono text-ink-soft">
- +{s.phone}
- </td>
- <td className="px-4 py-3">
- <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-sm text-[10px] font-semibold border ${
- s.status === 'connected'
- ? 'bg-pine-wash text-pine border-pine-line/60'
- : 'bg-clay-wash text-clay border-clay-line/60'
- }`}>
- <span className={`w-1.5 h-1.5 rounded-sm ${s.status === 'connected' ? 'bg-pine-soft' : 'bg-clay'}`} />
- {s.status}
- </span>
- </td>
- <td className="px-4 py-3">
- {warmup ? (
- <div className="space-y-1 w-32">
- <div className="flex justify-between text-[10px]">
- <span className={limitReached ? 'text-clay font-bold' : 'text-ink-soft'}>
- {warmup.todaySent} / {warmup.todayLimit} pesan
- </span>
- <span className="text-ink-faint font-mono">H-{warmup.day}</span>
- </div>
- <div className="w-full bg-surface-alt h-1.5 rounded-sm overflow-hidden">
- <div
- className={`h-full rounded-sm transition-all ${limitReached ? 'bg-clay' : 'bg-pine-soft'}`}
- style={{ width: Math.min(100, (warmup.todaySent / warmup.todayLimit) * 100) + '%' }}
- />
- </div>
- </div>
- ) : (
- <span className="text-ink-faint">-</span>
- )}
- </td>
+   <tr key={s.id} className={`transition hover:bg-surface-alt/40 ${isIncluded ? '' : 'opacity-50'}`}>
+     <td className="px-4 py-3 text-center">
+       <input
+         type="checkbox"
+         checked={isIncluded}
+         onChange={() => handleTogglePool(s.id)}
+         className="rounded border-line-strong text-pine focus:ring-pine w-4 h-4 cursor-pointer"
+       />
+     </td>
+     <td className="px-4 py-3 font-semibold text-ink">
+       <div>{s.name}</div>
+       <div className="text-[10px] text-ink-faint font-mono">{s.id}</div>
+     </td>
+     <td className="px-4 py-3 font-mono text-ink-soft">
+       +{s.phone}
+     </td>
+     <td className="px-4 py-3">
+       <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-sm text-[10px] font-semibold border ${
+         s.status === 'connected'
+           ? 'bg-pine-wash text-pine border-pine-line/60'
+           : 'bg-clay-wash text-clay border-clay-line/60'
+       }`}>
+         <span className={`w-1.5 h-1.5 rounded-sm ${s.status === 'connected' ? 'bg-pine-soft' : 'bg-clay'}`} />
+         {s.status}
+       </span>
+     </td>
+     <td className="px-4 py-3">
+       {warmup ? (
+         <div className="space-y-1 w-36">
+           <div className="flex justify-between items-center text-[10px]">
+             <span className={limitReached ? 'text-clay font-bold' : isUnlimited ? 'text-pine font-medium' : 'text-ink-soft'}>
+               {isUnlimited ? `${warmup.todaySent} / ∞ pesan` : `${warmup.todaySent} / ${warmup.todayLimit} pesan`}
+             </span>
+             <span className={`text-[9px] font-mono px-1 rounded ${isUnlimited ? 'bg-pine-wash text-pine border border-pine-line/40' : 'text-ink-faint'}`}>
+               {isUnlimited ? 'Mature (Lulus)' : `H-${warmup.day}`}
+             </span>
+           </div>
+           <div className="w-full bg-surface-alt h-1.5 rounded-sm overflow-hidden">
+             <div
+               className={`h-full rounded-sm transition-all ${limitReached ? 'bg-clay' : 'bg-pine-soft'}`}
+               style={{ width: isUnlimited ? '100%' : `${Math.min(100, (warmup.todaySent / (warmup.todayLimit || 1)) * 100)}%` }}
+             />
+           </div>
+         </div>
+       ) : (
+         <span className="text-ink-faint">-</span>
+       )}
+     </td>
  <td className="px-4 py-3">
  {s.timelockActive ? (
  <span className="text-[10px] text-honey bg-honey-wash/60 px-2 py-0.5 rounded border border-honey-line/50 flex items-center gap-1 w-fit">

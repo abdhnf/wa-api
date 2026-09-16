@@ -9,12 +9,13 @@ import { type QueueItem, type Session, EMPTY_SESSIONS, EMPTY_QUEUE } from '../du
 import { apiGetSessions, apiGetSessionMessages, apiSendBulk, apiGetAntiBan, apiUpdateAntiBan, apiResetReplyRatioCooldown, apiRetryMessage, apiGetQueueStatus, apiPauseQueue, apiResumeQueue, apiUpdateSessionProfile } from '../api';
 import { Toast } from './Toast';
 import { AutoRotateSettings } from './AutoRotateSettings';
+import { AdminCommandCenter } from './AdminCommandCenter';
 
 export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = false }) => {
- const [subTab, setSubTab] = useState<'monitor' | 'autorotate'>('monitor');
- const [queue, setQueue] = useState<QueueItem[]>(EMPTY_QUEUE);
+  const [subTab, setSubTab] = useState<'monitor' | 'autorotate' | 'command_center'>('monitor');
+  const [queue, setQueue] = useState<QueueItem[]>(EMPTY_QUEUE);
   const [queuePage, setQueuePage] = useState(1);
-  const [queueLimit] = useState(10);
+  const [queueLimit, setQueueLimit] = useState(10);
   const [queueTotal, setQueueTotal] = useState(0);
  const [sessions, setSessions] = useState<Session[]>(EMPTY_SESSIONS);
  const [isPaused, setIsPaused] = useState(false);
@@ -151,9 +152,9 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  })));
  }
  } catch (e) {
- console.error('Gagal fetch queue', e);
+   console.error('Gagal fetch queue', e);
  }
- }, [selectedSessionId]);
+ }, [selectedSessionId, queuePage, queueLimit]);
 
  // Polling sessions 10s
  useEffect(() => {
@@ -412,9 +413,26 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  <RefreshCw size={14} />
  Auto-Rotate & Session Pool
  </button>
+ {isAdmin && (
+ <button
+   onClick={() => setSubTab('command_center')}
+   className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-semibold transition cursor-pointer ${
+     subTab === 'command_center'
+       ? 'bg-pine text-surface '
+       : 'text-ink-muted hover:text-ink hover:bg-surface'
+   }`}
+ >
+   <ShieldCheck size={14} />
+   Command Center
+ </button>
+ )}
  </div>
 
  {subTab === 'autorotate' && <AutoRotateSettings showToast={showToast} />}
+
+ {subTab === 'command_center' && isAdmin && (
+ <AdminCommandCenter sessions={sessions} showToast={showToast} />
+ )}
 
  {subTab === 'monitor' && (
  <div className="space-y-6">
@@ -525,9 +543,12 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  <div className="text-xs text-ink-faint py-1">{loading ? 'Memuat sesi...' : 'Belum ada sesi'}</div>
  ) : (
  <select
- value={selectedSessionId}
- onChange={e => setSelectedSessionId(e.target.value)}
- className="w-full bg-surface-sunken border border-line rounded-md px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:border-pine font-medium"
+   value={selectedSessionId}
+   onChange={e => {
+     setSelectedSessionId(e.target.value);
+     setQueuePage(1);
+   }}
+   className="w-full bg-surface-sunken border border-line rounded-md px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:border-pine font-medium"
  >
  {sessions.map(s => (
  <option key={s.id} value={s.id}>{s.name} ({s.phone ? `+${s.phone}` : 'Belum pairing'})</option>
@@ -827,76 +848,133 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  )}
  </button>
 
- <span className="text-[11px] text-ink-muted bg-surface-sunken px-2.5 py-1 rounded-lg border border-line font-mono">
- {queue.length} pesan
- </span>
+ <div className="flex items-center gap-2 text-xs text-ink-muted">
+   <span>Tampilkan:</span>
+   <select
+     value={queueLimit}
+     onChange={(e) => {
+       setQueueLimit(Number(e.target.value));
+       setQueuePage(1);
+     }}
+     className="h-7 px-2 text-xs rounded-md bg-surface-alt border border-line text-ink font-medium focus:outline-none focus:border-pine cursor-pointer"
+   >
+     <option value={10}>10 baris</option>
+     <option value={25}>25 baris</option>
+     <option value={50}>50 baris</option>
+     <option value={100}>100 baris</option>
+   </select>
+   <span className="text-[11px] text-ink-muted bg-surface-sunken px-2.5 py-1 rounded-lg border border-line font-mono">
+     {queueTotal.toLocaleString('id-ID')} pesan
+   </span>
+ </div>
  </div>
  </div>
 
  {queue.length === 0 ? (
  <div className="p-10 text-center">
  <p className="text-xs text-ink-faint">
- {loading ? 'Memuat antrean...' : 'Belum ada pesan di antrean untuk session ini. Kirim pesan lewat Playground dulu.'}
+   {loading ? 'Memuat antrean...' : 'Belum ada pesan di antrean untuk session ini. Kirim pesan lewat Playground dulu.'}
  </p>
  </div>
  ) : (
  <div className="overflow-x-auto">
  <table className="w-full text-left text-xs min-w-[650px]">
- <thead className="bg-surface-sunken text-ink-muted uppercase tracking-wider text-[11px]">
- <tr>
- <th className="px-4 py-3">Waktu</th>
- <th className="px-4 py-3">Tujuan</th>
- <th className="px-4 py-3">Mode</th>
- <th className="px-4 py-3">Pesan</th>
- <th className="px-4 py-3">Pacing Delay</th>
- <th className="px-4 py-3">Status</th>
- <th className="px-4 py-3 text-right">Aksi</th>
- </tr>
- </thead>
- <tbody className="divide-y divide-line/70">
- {queue.map(item => {
- const isFailed = item.status === 'failed' || item.status === 'invalid_number';
- const isRetrying = retryingIds.has(item.id);
- return (
- <tr key={item.id} className="hover:bg-surface-alt/40 transition">
- <td className="px-4 py-3 text-ink-muted whitespace-nowrap">{item.timestamp}</td>
- <td className="px-4 py-3 font-mono text-ink whitespace-nowrap">+{item.recipient}</td>
- <td className="px-4 py-3">
- <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface-sunken border border-line text-[10px] text-ink-soft uppercase">
- {getModeIcon(item.mode)} {item.mode}
- </span>
- {item.isBulk && (
- <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-clay-wash/60 border border-clay-line/50 text-[10px] text-clay-deep">
- <Users size={10} /> Bulk
- </span>
- )}
- </td>
- <td className="px-4 py-3 text-ink-muted max-w-[220px] truncate">{item.text}</td>
- <td className="px-4 py-3 font-mono text-ink-faint">{(item.jitterDelayMs / 1000).toFixed(1)}s</td>
- <td className="px-4 py-3">{getStatusBadge(item.status)}</td>
- <td className="px-4 py-3 text-right">
- {isFailed ? (
- <button
- type="button"
- disabled={isRetrying}
- onClick={() => handleRetryMessage(item.id)}
- className="inline-flex items-center gap-1 px-2 py-1 rounded bg-honey-wash/70 hover:bg-honey-wash border border-honey-line/70 text-honey-deep text-[11px] font-medium transition cursor-pointer disabled:opacity-50"
- title="Kirim ulang pesan ini ke antrean"
- >
- {isRetrying ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
- <span>Retry</span>
- </button>
- ) : (
- <span className="text-[10px] text-ink-faint">-</span>
- )}
- </td>
- </tr>
- );
- })}
- </tbody>
+   <thead className="bg-surface-sunken text-ink-muted uppercase tracking-wider text-[11px]">
+     <tr>
+       <th className="px-4 py-3">Waktu</th>
+       <th className="px-4 py-3">Tujuan</th>
+       <th className="px-4 py-3">Mode</th>
+       <th className="px-4 py-3">Pesan</th>
+       <th className="px-4 py-3">Pacing Delay</th>
+       <th className="px-4 py-3">Status</th>
+       <th className="px-4 py-3 text-right">Aksi</th>
+     </tr>
+   </thead>
+   <tbody className="divide-y divide-line/70">
+     {queue.map(item => {
+       const isFailed = item.status === 'failed' || item.status === 'invalid_number';
+       const isRetrying = retryingIds.has(item.id);
+       return (
+         <tr key={item.id} className="hover:bg-surface-alt/40 transition">
+           <td className="px-4 py-3 text-ink-muted whitespace-nowrap">{item.timestamp}</td>
+           <td className="px-4 py-3 font-mono text-ink whitespace-nowrap">+{item.recipient}</td>
+           <td className="px-4 py-3">
+             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface-sunken border border-line text-[10px] text-ink-soft uppercase">
+               {getModeIcon(item.mode)} {item.mode}
+             </span>
+             {item.isBulk && (
+               <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-clay-wash/60 border border-clay-line/50 text-[10px] text-clay-deep">
+                 <Users size={10} /> Bulk
+               </span>
+             )}
+           </td>
+           <td className="px-4 py-3 text-ink-muted max-w-[220px] truncate">{item.text}</td>
+           <td className="px-4 py-3 font-mono text-ink-faint">{(item.jitterDelayMs / 1000).toFixed(1)}s</td>
+           <td className="px-4 py-3">{getStatusBadge(item.status)}</td>
+           <td className="px-4 py-3 text-right">
+             {isFailed ? (
+               <button
+                 type="button"
+                 disabled={isRetrying}
+                 onClick={() => handleRetryMessage(item.id)}
+                 className="inline-flex items-center gap-1 px-2 py-1 rounded bg-honey-wash/70 hover:bg-honey-wash border border-honey-line/70 text-honey-deep text-[11px] font-medium transition cursor-pointer disabled:opacity-50"
+                 title="Kirim ulang pesan ini ke antrean"
+               >
+                 {isRetrying ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                 <span>Retry</span>
+               </button>
+             ) : (
+               <span className="text-[10px] text-ink-faint">-</span>
+             )}
+           </td>
+         </tr>
+       );
+     })}
+   </tbody>
  </table>
  </div>
  )}
+
+ {/* Footer Pagination */}
+ <div className="p-3 border-t border-line flex flex-col sm:flex-row items-center justify-between gap-3 text-xs bg-surface-sunken/40">
+ <div className="text-ink-muted text-[11px]">
+ Menampilkan{' '}
+ <strong className="text-ink font-mono">
+   {queueTotal === 0 ? 0 : (queuePage - 1) * queueLimit + 1}
+ </strong>{' '}
+ -{' '}
+ <strong className="text-ink font-mono">
+   {Math.min(queuePage * queueLimit, queueTotal)}
+ </strong>{' '}
+ dari <strong className="text-ink font-mono">{queueTotal.toLocaleString('id-ID')}</strong> pesan
+ </div>
+
+ <div className="flex items-center gap-1.5">
+ <button
+   type="button"
+   disabled={queuePage <= 1 || loading}
+   onClick={() => setQueuePage((p) => Math.max(1, p - 1))}
+   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-surface border border-line text-ink-muted hover:text-ink disabled:opacity-40 disabled:pointer-events-none transition text-xs font-medium cursor-pointer"
+ >
+   <ChevronLeft size={13} />
+   <span>Sebelumnya</span>
+ </button>
+
+ <span className="px-2.5 py-1 text-xs font-mono font-semibold text-ink">
+   {queuePage} / {Math.ceil(queueTotal / queueLimit) || 1}
+ </span>
+
+ <button
+   type="button"
+   disabled={queuePage >= (Math.ceil(queueTotal / queueLimit) || 1) || loading}
+   onClick={() => setQueuePage((p) => Math.min(Math.ceil(queueTotal / queueLimit) || 1, p + 1))}
+   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-surface border border-line text-ink-muted hover:text-ink disabled:opacity-40 disabled:pointer-events-none transition text-xs font-medium cursor-pointer"
+ >
+   <span>Selanjutnya</span>
+   <ChevronRight size={13} />
+ </button>
+ </div>
+ </div>
  </div>
 
  </div>
@@ -919,9 +997,12 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  Session
  </label>
  <select
- value={selectedSessionId}
- onChange={e => setSelectedSessionId(e.target.value)}
- className="w-full bg-surface-sunken border border-line rounded-lg px-3 py-2 text-sm text-ink focus:outline-none focus:border-pine"
+   value={selectedSessionId}
+   onChange={e => {
+     setSelectedSessionId(e.target.value);
+     setQueuePage(1);
+   }}
+   className="w-full bg-surface-sunken border border-line rounded-lg px-3 py-2 text-sm text-ink focus:outline-none focus:border-pine"
  >
  {sessions.map(s => (
  <option key={s.id} value={s.id}>{s.name}</option>

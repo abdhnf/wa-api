@@ -505,7 +505,7 @@ export class SessionManager {
 
       const ab = this.getAntiBan(sessId);
       const warmupStatus = ab.warmup.getStatus();
-      if (warmupStatus.todaySent >= warmupStatus.todayLimit) {
+      if (warmupStatus.todayLimit !== -1 && warmupStatus.todaySent >= warmupStatus.todayLimit) {
         return { healthy: false, reason: `Batas harian warm-up (${warmupStatus.todaySent}/${warmupStatus.todayLimit}) tercapai` };
       }
 

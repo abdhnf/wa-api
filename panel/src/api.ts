@@ -307,6 +307,30 @@ export async function apiGetBulkStatus(batchId: string) {
   return request(`/messages/status/bulk/${batchId}`);
 }
 
+export async function apiGetBatchStatus(batchId: string) {
+  return request(`/batches/${batchId}/status`);
+}
+
+export async function apiPauseBatch(batchId: string, reason?: string) {
+  return request(`/batches/${batchId}/pause`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export async function apiResumeBatch(batchId: string) {
+  return request(`/batches/${batchId}/resume`, {
+    method: 'POST',
+  });
+}
+
+export async function apiClearBatch(batchId: string, reason?: string) {
+  return request(`/batches/${batchId}/clear`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+}
+
 export async function apiGetAntiBan(sessionId: string) {
   return request(`/sessions/${sessionId}/antiban`);
 }
