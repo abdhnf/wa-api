@@ -8,16 +8,31 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ## [Unreleased] — branch `fix/antiban-guard-resilience-20260916`
 
-**Tema:** resiliensi guard anti-ban + auto-resume antrean.
+**Tema:** resiliensi guard anti-ban, auto-resume antrean, persistensi status jeda.
 **Basis:** `570d547` (main). **Belum di-merge ke `main`.**
 
 Ringkasan singkat untuk tim dev: sebelumnya 3 dari 4 guard anti-ban membuang pesan
 ke status `failed` permanen saat terpicu, sementara satu-satunya guard yang menahan
 pesan justru memacetkan antrean karena `pauseQueue()` tidak punya jalur pemulihan
 otomatis. Branch ini menyeragamkan semuanya menjadi "tahan pesan + jeda sementara +
-lanjut sendiri", sekaligus menutup bug yang membuat delay pacing terkalikan 10x.
+lanjut sendiri", mempersist status jeda agar bertahan melewati restart, memperbaiki
+bug yang membuat delay pacing terkalikan 10x, dan memperbaiki `db.ts` yang selalu
+gagal pada instalasi database baru.
 
 ### Fixed
+
+- **`db.ts` selalu gagal pada database baru** (`db.ts`).
+  Blok `CREATE INDEX` dijalankan **sebelum** `ensureColumn()`, padahal 5 dari 8 index
+  menyentuh kolom yang baru ditambahkan lewat migrasi ringan (`priority`, `batch_id`,
+  `user_id`, `wa_message_id`). Fresh install selalu berhenti dengan
+  `no such column: priority`. Blok index dipindah ke setelah seluruh `ensureColumn`.
+  Ditemukan saat menyiapkan lingkungan uji — sebelumnya tidak terlihat karena
+  database produksi sudah punya semua kolom.
+
+- **`record()` dan `getDelay()` memakai hash yang berbeda** (`antiban.ts`).
+  `record()` meng-hash konten mentah sementara `getDelay()`/`getDelayReason()`
+  meng-hash konten ternormalisasi, sehingga kunci pelacak tidak pernah cocok dan
+  guard anti-spam tidak menyala. Keduanya kini memakai hash yang sama.
 
 - **Delay pacing terkalikan 10x pada setiap pengiriman** (`session-manager.ts`).
   `ab.reconnect.onReconnect()` dipanggil di jalur sukses kirim pesan, sehingga
@@ -32,9 +47,8 @@ lanjut sendiri", sekaligus menutup bug yang membuat delay pacing terkalikan 10x.
   nama penerima per kontak. Akibatnya 52 pesan blast dengan isi identik
   menghasilkan 52 hash berbeda dan `maxIdenticalMessages` tidak pernah tercapai.
   Ditambahkan `normalizeContentForHash()` yang menyamarkan baris personalisasi
-  (`Yth.`, `Kepada`, `Dear`, `Halo`, `Hai`, `Hi`) sebelum hashing. Setelah
-  perbaikan, 52 pesan identik menghasilkan 1 hash. Pesan tanpa baris sapaan
-  tidak terpengaruh.
+  (`Yth.`, `Kepada`, `Dear`, `Halo`, `Hai`, `Hi`) sebelum hashing. Pesan tanpa
+  baris sapaan tidak terpengaruh.
 
 - **Pesan hilang dari antrean saat guard memblokir** (`session-manager.ts`).
   Guard `timelock`, `replyRatio`, dan `contactGraph` menandai pesan `failed`
@@ -52,6 +66,14 @@ lanjut sendiri", sekaligus menutup bug yang membuat delay pacing terkalikan 10x.
   timer bersifat `unref()` agar tidak menahan proses Node, dan jadwal yang lebih
   cepat tidak ditimpa oleh jadwal yang lebih lambat.
 
+- **Persistensi status jeda antrean** (`db.ts`, `session-manager.ts`).
+  `pausedSessions` dan `pausedBatches` sebelumnya hanya in-memory, sehingga
+  restart service menghapus seluruh jeda dan antrean langsung berjalan kembali
+  tanpa sepengetahuan operator. Kini disimpan ke tabel `settings`
+  (`queue_paused_sessions`, `queue_paused_batches`) dan dipulihkan saat startup
+  lewat `restoreQueuePauseState()`, dipanggil dari `recoverPendingMessages()`.
+  Entri non-jeda dibuang saat disimpan agar tabel tidak menumpuk data basi.
+
 - **`remainingMs()` pada setiap guard** (`antiban.ts`) sebagai sumber waktu tunggu
   bagi penjadwal auto-resume: `TimelockGuard`, `ReplyRatioGuard`,
   `BanRecoveryOrchestrator`, dan `ContactGraphWarmer`.
@@ -67,13 +89,21 @@ lanjut sendiri", sekaligus menutup bug yang membuat delay pacing terkalikan 10x.
 
 ### Changed
 
+- **Guard pesan identik kini dihitung per penerima** (`antiban.ts`).
+  Sebelumnya `maxIdenticalMessages` dihitung global per konten, sehingga setelah
+  normalisasi hash aktif, pengumuman yang sama ke 52 orang akan diblokir — padahal
+  itu broadcast yang sah. Kunci pelacak kini gabungan **penerima + hash konten**:
+  - Pengumuman sama ke 52 penerima berbeda → lolos (broadcast normal)
+  - Pesan sama 12x ke satu orang → diblokir di ambang preset
+  - 12 pesan berbeda ke satu orang → lolos
+
 - **`normalizeContentForHash()` diekspor** dari `antiban.ts` agar dapat diuji
   terpisah dan dipakai ulang oleh jalur validasi lain.
 
 ### Catatan penting untuk reviewer
 
 - Perubahan ini **belum diuji terhadap nomor WhatsApp produksi**. Verifikasi yang
-  dilakukan bersifat unit/integration test lokal (22 skenario, lihat bagian
+  dilakukan bersifat unit/integration test lokal + smoke test server (lihat bagian
   Verifikasi) — bukan uji lapangan.
 - **Dampak kecepatan:** menghapus `onReconnect()` di jalur sukses membuat
   pengiriman blast menjadi **~10x lebih cepat** dari kondisi saat ini. Ini adalah
@@ -85,30 +115,46 @@ lanjut sendiri", sekaligus menutup bug yang membuat delay pacing terkalikan 10x.
 
 ### Verifikasi
 
-22 skenario uji dijalankan terhadap hasil build (`dist/`), bukan terhadap production:
+**38 skenario uji** dijalankan terhadap hasil build (`dist/`) dan server nyata di
+port terpisah (bukan production):
 
+*Round 1 — guard & auto-resume (22 skenario):*
 - Normalisasi hash: 52 pesan identik → 1 hash; konten berbeda tetap beda hash;
   pesan tanpa baris sapaan tidak berubah.
 - Flag `distraction`: 0 dari 20.000 pesan pada preset `broadcast` terkena jeda;
   preset `balanced` tetap ~5%.
 - `remainingMs()`: idle → 0, aktif → positif, guard nonaktif → 0.
-- Ambang blokir guard identik tercapai tepat pada pesan ke-10 (preset `broadcast`).
 - Penjadwal auto-resume: penjepitan batas bawah/atas, pembersihan saat resume
   manual, dan antrean benar-benar terbuka sendiri setelah masa blokir lewat.
 
+*Round 2 — db fresh install, persistensi, guard identik (16 skenario):*
+- `db.ts` berhasil inisialisasi pada database kosong dan membentuk 8 index.
+- Status jeda tersimpan, entri non-jeda dibuang, dan instance `SessionManager`
+  baru memulihkan jeda dari database (simulasi restart).
+- Guard identik: broadcast 52 orang berbeda → 0 diblokir; spam 12x ke satu orang
+  → diblokir; 12 pesan berbeda ke satu orang → 0 diblokir.
+
+*Smoke test server (`dist/server.js`, database bersih, port 3199):*
+- `GET /api/v1/health` → `{"status":"ok"}`.
+- `GET /sessions/:id/queue/status` mengembalikan field baru `autoResumeInMs`.
+- `POST /batches/:id/pause` menulis ke tabel `settings`.
+- **Setelah proses benar-benar dimatikan dan dijalankan ulang**, batch masih
+  berstatus `isPaused: true` dengan alasan aslinya — membuktikan persistensi
+  bekerja lintas restart.
+
 ### Diketahui belum diperbaiki (di luar cakupan branch ini)
 
-- **`db.ts` gagal inisialisasi pada database baru.** Index
-  `idx_messages_status_prio` dibuat (baris ~105) sebelum `ensureColumn('messages',
-  'priority', ...)` (baris ~139), sehingga fresh install selalu error
-  `no such column: priority`. Ditemukan saat menyiapkan lingkungan uji; belum
-  diperbaiki karena menyentuh skema database produksi.
-- **`pausedSessions` / `pausedBatches` masih in-memory.** Restart service
-  menghapus seluruh status jeda. Perlu dipersist ke SQLite.
+- **Dua sumber kebenaran untuk status pause.** Dashboard *set* jeda per-batch
+  (`pauseBatch`) tetapi *membaca* per-sesi (`fetchQueueStatus`). UI bisa
+  menampilkan status yang keliru.
 - **Status `pending` masih ambigu** — dipakai untuk "menunggu di dashboard"
   sekaligus "menunggu di gateway".
 - **Pembatalan kampanye masih tercatat `failed`,** bukan `cancelled`, sehingga
   ikut menurunkan `delivery_rate` sesi.
+- **Dashboard belum punya selector preset antiban.** Endpoint backend
+  (`getAntiBanStatus` / `updateAntiBanSettings`) sudah tersedia.
+- **Monitoring report-rate belum ada.** Tidak ada pengukuran berapa penerima yang
+  mem-block/report nomor — padahal ini faktor paling menentukan reputasi nomor.
 - **`date.timezone = PRC` pada `php.ini`** (UTC+8) di server; Laravel sudah aman
   lewat `APP_TIMEZONE`, tetapi kode PHP yang memakai `date()` native masih drift.
 - **`onTimelockUpdate()` belum pernah dipanggil**, sehingga `timeEnforcementEnds`

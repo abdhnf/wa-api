@@ -100,18 +100,6 @@ CREATE TABLE IF NOT EXISTS blast_launch_tokens (
 `);
 
 
-// Production Indexes: Optimalkan query pencarian pesan, status antrean, dan receipt WA
-db.exec(`
-CREATE INDEX IF NOT EXISTS idx_messages_status_prio ON messages (status, priority, created_at);
-CREATE INDEX IF NOT EXISTS idx_messages_session_time ON messages (session_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_user_time ON messages (user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_batch ON messages (batch_id) WHERE batch_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_messages_wa_id ON messages (wa_message_id) WHERE wa_message_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
-CREATE INDEX IF NOT EXISTS idx_api_logs_user_time ON api_logs (user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs (created_at);
-`);
-
 // Migrasi ringan: tambah kolom kalau belum ada (SQLite ALTER TABLE ... ADD COLUMN)
 function ensureColumn(table: string, column: string, ddl: string): void {
   const cols = (db.prepare(`PRAGMA table_info(${table})`).all() as any[]).map((c) => c.name);
@@ -139,6 +127,23 @@ ensureColumn('users', 'quota_period', "TEXT NOT NULL DEFAULT 'weekly'");
 ensureColumn('messages', 'priority', "TEXT DEFAULT 'normal'");
 ensureColumn('users', 'blast_pin_hash', 'TEXT');
 ensureColumn('users', 'blast_access_token', 'TEXT');
+
+// Production Indexes: Optimalkan query pencarian pesan, status antrean, dan receipt WA.
+//
+// WAJIB dijalankan SETELAH ensureColumn di atas: sebagian besar index menyentuh
+// kolom yang baru ditambahkan lewat migrasi ringan (priority, batch_id, user_id,
+// wa_message_id). Kalau diletakkan sebelum ensureColumn, instalasi pada database
+// baru langsung gagal dengan "no such column" karena kolomnya belum ada.
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_messages_status_prio ON messages (status, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_session_time ON messages (session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_user_time ON messages (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_batch ON messages (batch_id) WHERE batch_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_wa_id ON messages (wa_message_id) WHERE wa_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
+CREATE INDEX IF NOT EXISTS idx_api_logs_user_time ON api_logs (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs (created_at);
+`);
 
 // Sinkronisasi data kuota existing
 try {
@@ -759,6 +764,46 @@ export function getAllSettings(): Record<string, string> {
 
 export function setSetting(key: string, value: string): void {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value);
+}
+
+// ============ Persistensi status jeda antrean ============
+// Status jeda disimpan di tabel `settings` supaya bertahan melewati restart
+// service. Sebelumnya hanya in-memory, sehingga restart menghapus semua jeda
+// dan antrean langsung berjalan kembali tanpa sepengetahuan operator.
+
+const QUEUE_PAUSE_SESSIONS_KEY = 'queue_paused_sessions';
+const QUEUE_PAUSE_BATCHES_KEY = 'queue_paused_batches';
+
+export interface PersistedPauseState {
+  sessions: Record<string, { isPaused: boolean; reason?: string }>;
+  batches: Record<string, { isPaused: boolean; reason?: string }>;
+}
+
+export function loadQueuePauseState(): PersistedPauseState {
+  const parse = (key: string): Record<string, { isPaused: boolean; reason?: string }> => {
+    try {
+      const raw = getSetting(key);
+      if (!raw) return {};
+      const obj = JSON.parse(raw);
+      return obj && typeof obj === 'object' ? obj : {};
+    } catch {
+      return {};
+    }
+  };
+  return { sessions: parse(QUEUE_PAUSE_SESSIONS_KEY), batches: parse(QUEUE_PAUSE_BATCHES_KEY) };
+}
+
+export function saveQueuePauseState(state: PersistedPauseState): void {
+  try {
+    // Hanya simpan entri yang benar-benar sedang dijeda; entri non-jeda dibuang
+    // agar tabel tidak menumpuk data basi.
+    const prune = (m: Record<string, { isPaused: boolean; reason?: string }>) =>
+      Object.fromEntries(Object.entries(m).filter(([, v]) => v?.isPaused));
+    setSetting(QUEUE_PAUSE_SESSIONS_KEY, JSON.stringify(prune(state.sessions)));
+    setSetting(QUEUE_PAUSE_BATCHES_KEY, JSON.stringify(prune(state.batches)));
+  } catch (e) {
+    console.warn('[queue-pause] Gagal menyimpan status jeda antrean:', e);
+  }
 }
 
 export function setSettings(settings: Record<string, string>): void {

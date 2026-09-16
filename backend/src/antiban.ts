@@ -168,6 +168,17 @@ function hashContent(content: string): string {
  * Heuristik ini menyamarkan baris personalisasi yang bervariasi per penerima.
  * Pesan tanpa baris sapaan tidak terpengaruh (hash tidak berubah).
  */
+/**
+ * Kunci pelacak pesan identik: kombinasi penerima + hash konten.
+ *
+ * Kenapa per penerima, bukan global: mengirim satu pengumuman yang sama ke 52
+ * orang adalah broadcast yang sah, bukan spam. Yang benar-benar berisiko adalah
+ * mengirim pesan yang sama berulang kali ke ORANG YANG SAMA.
+ */
+function identicalKey(recipient: string, contentHash: string): string {
+  return `${recipient}|${contentHash}`;
+}
+
 export function normalizeContentForHash(content: string): string {
   return content
     .replace(/^[ \t]*(Yth|Kepada|Dear|Halo|Hai|Hi)[^\n]*/gim, '$1 <PENERIMA>')
@@ -203,9 +214,9 @@ export class RateLimiter {
       return Math.max((oldest.timestamp + MS.MIN) - now, 1000);
     }
 
-    const tracker = this.identicalCount.get(contentHash);
+    const tracker = this.identicalCount.get(identicalKey(recipient, contentHash));
     if (tracker && now - tracker.firstSeen < 3_600_000 && tracker.count >= this.cfg.maxIdenticalMessages) {
-      return -1; // identical spam
+      return -1; // pesan identik berulang ke penerima yang sama
     }
 
     let delay: number;
@@ -231,17 +242,22 @@ export class RateLimiter {
   record(recipient: string, content: string): void {
     const now = Date.now();
     if (now - this.lastMessageTime > 30_000) this.burstCount = 0;
+    // Wajib sama dengan hash di getDelay()/getDelayReason(), kalau tidak
+    // kunci pelacak tidak akan pernah cocok dan guard identik tidak menyala.
     const contentHash = hashContent(normalizeContentForHash(content));
     this.messages.push({ timestamp: now, recipient, contentHash });
     this.knownChats.add(recipient);
     this.lastMessageTime = now;
 
-    const tracker = this.identicalCount.get(contentHash);
+    // Dihitung per penerima: pengumuman yang sama ke banyak orang adalah
+    // broadcast normal, sedangkan pesan sama berulang ke satu orang adalah spam.
+    const key = identicalKey(recipient, contentHash);
+    const tracker = this.identicalCount.get(key);
     if (tracker && now - tracker.firstSeen < 3_600_000) {
       tracker.count++;
       tracker.lastSeen = now;
     } else {
-      this.identicalCount.set(contentHash, { count: 1, firstSeen: now, lastSeen: now });
+      this.identicalCount.set(key, { count: 1, firstSeen: now, lastSeen: now });
     }
   }
 
@@ -254,9 +270,9 @@ export class RateLimiter {
       return { allowed: false, delayMs: -1, reason: 'Kuota batas harian sesi tercapai' };
     }
 
-    const tracker = this.identicalCount.get(contentHash);
+    const tracker = this.identicalCount.get(identicalKey(recipient, contentHash));
     if (tracker && now - tracker.firstSeen < 3_600_000 && tracker.count >= this.cfg.maxIdenticalMessages) {
-      return { allowed: false, delayMs: -1, reason: 'Pesan identik terdeteksi berulang kali (anti-spam)' };
+      return { allowed: false, delayMs: -1, reason: 'Pesan identik berulang ke penerima yang sama (anti-spam)' };
     }
 
     const d = this.getDelay(recipient, content);

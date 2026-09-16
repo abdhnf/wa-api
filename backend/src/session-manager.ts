@@ -12,7 +12,7 @@ function validatePhoneFormat(phone: string): { valid: boolean; normalized: strin
 }
 
 import { config } from './config.js';
-import { upsertSession, insertMessage, updateMessageStatus, getMessageById, listSessions as dbListSessions, getAntiBanState, saveAntiBanState, getSessionAntiBanSettings, saveSessionAntiBanSettings, getSetting, getUserSetting, getLastSessionForRecipient, resetStuckMessages, getPendingMessages, updateSessionProfile } from './db.js';
+import { upsertSession, insertMessage, updateMessageStatus, getMessageById, listSessions as dbListSessions, getAntiBanState, saveAntiBanState, getSessionAntiBanSettings, saveSessionAntiBanSettings, getSetting, getUserSetting, getLastSessionForRecipient, resetStuckMessages, getPendingMessages, updateSessionProfile, loadQueuePauseState, saveQueuePauseState } from './db.js';
 import { RateLimiter, WarmUp, TimelockGuard, PresenceChoreographer, ReconnectThrottle, BanRecoveryOrchestrator, ReplyRatioGuard, ContactGraphWarmer, DEFAULT_ANTIBAN_CONFIG, ANTIBAN_PRESETS, type AntiBanPreset, type AntiBanState } from './antiban.js';
 import type { OutboundMessage, SessionInfo, QueueSessionStatus } from './types.js';
 import type { WhatsAppEngine } from './engine/WhatsAppEngine.js';
@@ -180,6 +180,10 @@ export class SessionManager {
 
   /** Memulihkan pesan 'pending' dari SQLite ke antrean memori saat startup / restart */
   async recoverPendingMessages(): Promise<number> {
+    // Pulihkan status jeda lebih dulu supaya antrean yang sengaja dijeda
+    // tidak langsung tumpah keluar sebelum operator sempat memeriksanya.
+    this.restoreQueuePauseState();
+
     const resetCount = resetStuckMessages();
     if (resetCount > 0) {
       console.log(`[queue-recovery] Reset ${resetCount} pesan macet ('pacing'/'sending') kembali ke 'pending'`);
@@ -206,6 +210,40 @@ export class SessionManager {
       void this.processQueue(sid);
     }
     return pending.length;
+  }
+
+  /** Simpan status jeda (sesi + batch) ke SQLite agar bertahan melewati restart. */
+  private persistQueuePauseState(): void {
+    saveQueuePauseState({
+      sessions: Object.fromEntries(this.pausedSessions),
+      batches: Object.fromEntries(this.pausedBatches),
+    });
+  }
+
+  /**
+   * Pulihkan status jeda dari SQLite. Dipanggil saat startup bersama
+   * recoverPendingMessages() agar jeda yang diset operator tidak hilang
+   * ketika service di-restart.
+   */
+  restoreQueuePauseState(): number {
+    const state = loadQueuePauseState();
+    let restored = 0;
+    for (const [sid, v] of Object.entries(state.sessions)) {
+      if (v?.isPaused) {
+        this.pausedSessions.set(sid, { isPaused: true, reason: v.reason });
+        restored++;
+      }
+    }
+    for (const [bid, v] of Object.entries(state.batches)) {
+      if (v?.isPaused) {
+        this.pausedBatches.set(bid, { isPaused: true, reason: v.reason });
+        restored++;
+      }
+    }
+    if (restored > 0) {
+      console.log(`[queue-pause] Memulihkan ${restored} status jeda antrean dari database.`);
+    }
+    return restored;
   }
 
   /**
@@ -256,6 +294,7 @@ export class SessionManager {
   /** Pause antrean normal (blast) per sesi secara manual / otomatis */
   pauseQueue(sessionId: string, reason = 'Dijeda oleh pengguna'): { success: boolean; status: QueueSessionStatus } {
     this.pausedSessions.set(sessionId, { isPaused: true, reason });
+    this.persistQueuePauseState();
     console.log(`[session:${sessionId}] ⏸️ Antrean blast di-pause: ${reason}`);
     return { success: true, status: this.getQueueStatus(sessionId) };
   }
@@ -269,6 +308,7 @@ export class SessionManager {
       this.autoResumeWaitMs.delete(sessionId);
     }
     this.pausedSessions.set(sessionId, { isPaused: false, reason: undefined });
+    this.persistQueuePauseState();
     console.log(`[session:${sessionId}] ▶️ Antrean blast di-resume`);
     void this.processQueue(sessionId);
     return { success: true, status: this.getQueueStatus(sessionId) };
@@ -277,6 +317,7 @@ export class SessionManager {
   /** Pause antrean per batch/kampanye tertentu (tidak mempengaruhi batch lain di sesi yang sama) */
   pauseBatch(batchId: string, reason = 'Kampanye dijeda oleh pengguna'): { success: boolean; batchId: string; isPaused: boolean; reason?: string } {
     this.pausedBatches.set(batchId, { isPaused: true, reason });
+    this.persistQueuePauseState();
     console.log(`[batch:${batchId}] ⏸️ Antrean batch di-pause: ${reason}`);
     return { success: true, batchId, isPaused: true, reason };
   }
@@ -284,6 +325,7 @@ export class SessionManager {
   /** Resume antrean per batch/kampanye tertentu */
   resumeBatch(batchId: string): { success: boolean; batchId: string; isPaused: boolean } {
     this.pausedBatches.delete(batchId);
+    this.persistQueuePauseState();
     console.log(`[batch:${batchId}] ▶️ Antrean batch di-resume`);
     // Picu processQueue pada seluruh sesi yang menyimpan pesan dari batch ini
     for (const [sid, queue] of this.normalQueues.entries()) {
@@ -341,6 +383,7 @@ export class SessionManager {
       }
       this.normalQueues.set(sessionId, remaining);
       this.pausedBatches.delete(targetBatchId);
+      this.persistQueuePauseState();
       console.log(`[session:${sessionId}][batch:${targetBatchId}] 🛑 Antrean batch dibersihkan (${cleared} pesan dibatalkan, sisa ${remaining.length} pesan di sesi)`);
       return { success: true, clearedCount: cleared, batchId: targetBatchId };
     }
@@ -351,6 +394,7 @@ export class SessionManager {
     }
     this.normalQueues.set(sessionId, []);
     this.pausedSessions.delete(sessionId);
+    this.persistQueuePauseState();
     console.log(`[session:${sessionId}] 🛑 Seluruh antrean blast sesi dibersihkan (${count} pesan dibatalkan)`);
     return { success: true, clearedCount: count };
   }
@@ -371,6 +415,7 @@ export class SessionManager {
       this.normalQueues.set(sid, remaining);
     }
     this.pausedBatches.delete(batchId);
+    this.persistQueuePauseState();
     console.log(`[batch:${batchId}] 🛑 Antrean batch dibatalkan lintas seluruh sesi (${totalCleared} pesan dibatalkan)`);
     return { success: true, batchId, clearedCount: totalCleared };
   }
