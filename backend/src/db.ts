@@ -456,14 +456,14 @@ export function listSessions(filterUserId?: string): SessionInfo[] {
     const byHour = new Map(hourlyStats.map((s: any) => [s.hour, s]));
     const merged = slots.map((slot) => byHour.get(slot.hour) || slot);
 
-    // 2. Agregasi metrik riil dari tabel messages
+    // 2. Agregasi metrik riil dari tabel messages (pesan cancelled tidak dihitung sebagai total kirim)
     const summary = db.prepare(
       `SELECT 
-         COUNT(*) as total_sent,
+         COUNT(CASE WHEN status != 'cancelled' THEN 1 END) as total_sent,
          SUM(CASE WHEN status IN ('sent', 'delivered', 'read') THEN 1 ELSE 0 END) as total_delivered,
          SUM(CASE WHEN status IN ('failed', 'invalid_number', 'not_registered') THEN 1 ELSE 0 END) as total_failed,
          ROUND(AVG(jitter_delay_ms) / 1000.0, 1) as avg_delay_sec,
-         SUM(CASE WHEN date(datetime(created_at, 'localtime')) = date('now', 'localtime') THEN 1 ELSE 0 END) as today_sent
+         SUM(CASE WHEN date(datetime(created_at, 'localtime')) = date('now', 'localtime') AND status != 'cancelled' THEN 1 ELSE 0 END) as today_sent
        FROM messages WHERE session_id = ?`
     ).get(r.id) as any;
 

@@ -375,7 +375,7 @@ export class SessionManager {
       let cleared = 0;
       for (const msg of queue) {
         if (msg.batchId === targetBatchId) {
-          updateMessageStatus(msg.id, 'failed', reason);
+          updateMessageStatus(msg.id, 'cancelled', reason);
           cleared++;
         } else {
           remaining.push(msg);
@@ -390,7 +390,7 @@ export class SessionManager {
 
     const count = queue.length;
     for (const msg of queue) {
-      updateMessageStatus(msg.id, 'failed', reason);
+      updateMessageStatus(msg.id, 'cancelled', reason);
     }
     this.normalQueues.set(sessionId, []);
     this.pausedSessions.delete(sessionId);
@@ -406,7 +406,7 @@ export class SessionManager {
       const remaining: OutboundMessage[] = [];
       for (const msg of queue) {
         if (msg.batchId === batchId) {
-          updateMessageStatus(msg.id, 'failed', reason);
+          updateMessageStatus(msg.id, 'cancelled', reason);
           totalCleared++;
         } else {
           remaining.push(msg);
