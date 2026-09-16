@@ -426,6 +426,7 @@ export class TimelockGuard {
   private isActive = false;
   private expiresAt: number | null = null;
   private errorCount = 0;
+  private enforcementType: string | null = null;
   private knownChats = new Set<string>();
   constructor(private cfg: AntiBanConfig, state?: AntiBanState['timelock']) {
     if (state) {
@@ -436,18 +437,31 @@ export class TimelockGuard {
     }
   }
 
-  /** Record error 463. Assume locked ~60s if no expiry yet. */
-  record463Error(): void {
+  /** Record error 463. Gunakan timeEnforcementEnds resmi dari WA bila ada, atau fallback 60s. */
+  record463Error(timeEnforcementEnds?: Date | null): void {
     this.errorCount++;
-    if (!this.isActive) {
-      this.isActive = true;
+    this.isActive = true;
+    if (timeEnforcementEnds) {
+      this.expiresAt = timeEnforcementEnds.getTime();
+    } else if (!this.expiresAt || this.expiresAt <= Date.now()) {
       this.expiresAt = Date.now() + 60_000;
     }
   }
 
-  onTimelockUpdate(data: { isActive?: boolean; timeEnforcementEnds?: Date | null }): void {
-    this.isActive = !!data.isActive;
-    this.expiresAt = data.timeEnforcementEnds ? data.timeEnforcementEnds.getTime() : null;
+  onTimelockUpdate(data: { isActive?: boolean; timeEnforcementEnds?: Date | null; enforcementType?: string }): void {
+    if (data.isActive === false) {
+      this.lift();
+      return;
+    }
+    this.isActive = true;
+    if (data.enforcementType) {
+      this.enforcementType = data.enforcementType;
+    }
+    if (data.timeEnforcementEnds) {
+      this.expiresAt = data.timeEnforcementEnds.getTime();
+    } else if (!this.expiresAt || this.expiresAt <= Date.now()) {
+      this.expiresAt = Date.now() + 60_000;
+    }
   }
 
   registerKnownChat(jid: string): void {
@@ -470,13 +484,14 @@ export class TimelockGuard {
     const expiresIn = this.expiresAt ? Math.max(0, this.expiresAt - Date.now()) : 60_000;
     return {
       allowed: false,
-      reason: `Reachout timelocked (463). Kontak baru diblokir. Resume dalam ${Math.ceil(expiresIn / 1000)}s.`,
+      reason: `Reachout timelocked (463). Kontak baru diblokir. Resume dalam ${Math.ceil(expiresIn / 1000)}s.${this.enforcementType ? ` Tipe: ${this.enforcementType}` : ''}`,
     };
   }
 
   lift(): void {
     this.isActive = false;
     this.expiresAt = null;
+    this.enforcementType = null;
   }
 
   /** Sisa waktu timelock dalam ms — dipakai penjadwal auto-resume antrean. */
@@ -487,7 +502,13 @@ export class TimelockGuard {
   }
 
   getState() {
-    return { isActive: this.isActive, expiresAt: this.expiresAt, errorCount: this.errorCount, knownChats: [...this.knownChats] };
+    return {
+      isActive: this.isActive,
+      expiresAt: this.expiresAt,
+      errorCount: this.errorCount,
+      enforcementType: this.enforcementType,
+      knownChats: [...this.knownChats]
+    };
   }
 }
 

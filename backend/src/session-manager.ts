@@ -451,13 +451,40 @@ export class SessionManager {
     this.persistAntiBan(sessionId);
   }
 
-  /** Record error 463 (reachout restricted) → timelock guard */
+  /** Record error 463 (reachout restricted) → timelock guard & query durasi pasti dari WA */
   async record463(sessionId: string): Promise<void> {
     try {
       const ab = this.getAntiBan(sessionId);
       ab.timelock.record463Error();
       this.persistAntiBan(sessionId);
+
+      // Query langsung durasi sanksi resmi dari WhatsApp server
+      if (typeof this.engine.fetchReachoutTimelock === 'function') {
+        this.engine.fetchReachoutTimelock(sessionId).then((lockData) => {
+          if (lockData) {
+            this.handleTimelockUpdate(sessionId, lockData);
+          }
+        }).catch(() => {});
+      }
     } catch {}
+  }
+
+  /** Handle update timelock reachout resmi dari server WhatsApp (durasi asli) */
+  handleTimelockUpdate(sessionId: string, data: { isActive?: boolean; timeEnforcementEnds?: Date | null; enforcementType?: string }): void {
+    try {
+      const ab = this.getAntiBan(sessionId);
+      ab.timelock.onTimelockUpdate(data);
+      if (data.isActive) {
+        const timeStr = data.timeEnforcementEnds ? data.timeEnforcementEnds.toLocaleString('id-ID') : 'durasi default';
+        console.warn(`[AntiBan] Sesi ${sessionId} terkena timelock 463 resmi WA s/d ${timeStr} (${data.enforcementType || 'DEFAULT'})`);
+        ab.recovery.reportError('timelock', `Reachout timelock 463 aktif s/d ${timeStr}`);
+      } else {
+        console.log(`[AntiBan] Timelock 463 untuk sesi ${sessionId} telah dicabut oleh WhatsApp`);
+      }
+      this.persistAntiBan(sessionId);
+    } catch (err) {
+      console.error(`[SessionManager] Gagal update timelock ${sessionId}:`, err);
+    }
   }
 
   /** Ambil status anti-ban session untuk panel */
@@ -912,7 +939,7 @@ export class SessionManager {
           updateMessageStatus(msg.id, 'failed', errMsg);
           msg.status = 'failed';
           if (/463|reachout|restricted/i.test(errMsg)) {
-            ab.timelock.record463Error();
+            await this.record463(sessionId);
             ab.recovery.reportError('timelock', errMsg);
             this.persistAntiBan(sessionId);
           } else if (/429|rate.overlimit|too many/i.test(errMsg)) {

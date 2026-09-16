@@ -124,6 +124,17 @@ export class BaileysEngine {
     socket.ev.on('connection.update', async (u) => {
       const s = this.active.get(sessionId);
 
+      // Tangkap update reachout timelock dari server WA (error 463 / restriction updates)
+      if ((u as any).reachoutTimeLock) {
+        const rtl = (u as any).reachoutTimeLock;
+        console.log(`[BaileysEngine] Reachout timelock update for ${sessionId}:`, rtl);
+        this.onTimelockUpdateCallback?.(sessionId, {
+          isActive: rtl.isActive,
+          timeEnforcementEnds: rtl.timeEnforcementEnds || null,
+          enforcementType: rtl.enforcementType,
+        });
+      }
+
       if (u.qr) {
         try {
           const qrDataUrl = await QRCode.toDataURL(u.qr);
@@ -147,6 +158,18 @@ export class BaileysEngine {
         this.onReconnectCallback?.(sessionId);
         if (s.qrTimer) clearTimeout(s.qrTimer);
         s.qrResolve?.(''); // Resolve QR promise if still pending
+
+        // Cek status reachout timelock akun saat connected
+        try {
+          const lock = await (socket as any).fetchAccountReachoutTimelock?.();
+          if (lock) {
+            this.onTimelockUpdateCallback?.(sessionId, {
+              isActive: lock.isActive,
+              timeEnforcementEnds: lock.timeEnforcementEnds || null,
+              enforcementType: lock.enforcementType,
+            });
+          }
+        } catch {}
       } else if (u.connection === 'close') {
         const code = (u.lastDisconnect?.error as any)?.output?.statusCode;
         const reason = code === DisconnectReason.loggedOut ? 'logged_out' : 'disconnected';
@@ -526,9 +549,31 @@ export class BaileysEngine {
 
   /** Callback saat server WA menandai reachout restricted (463) */
   on463Callback: ((sessionId: string) => void) | null = null;
+  /** Callback saat server WA mengirim update timelock 463 dengan durasi asli */
+  onTimelockUpdateCallback: ((sessionId: string, data: { isActive?: boolean; timeEnforcementEnds?: Date | null; enforcementType?: string }) => void) | null = null;
   onDisconnectCallback: ((sessionId: string) => void) | null = null;
   onReconnectCallback: ((sessionId: string) => void) | null = null;
   onIncomingCallback: ((sessionId: string, jid: string) => void) | null = null;
+
+  /** Query proaktif status timelock akun dari server WhatsApp via W-Mex */
+  async fetchReachoutTimelock(sessionId: string): Promise<{ isActive?: boolean; timeEnforcementEnds?: Date | null; enforcementType?: string } | null> {
+    const s = this.active.get(sessionId);
+    if (!s || !this.isReady(s)) return null;
+    try {
+      const lock = await (s.socket as any).fetchAccountReachoutTimelock?.();
+      if (lock) {
+        return {
+          isActive: lock.isActive,
+          timeEnforcementEnds: lock.timeEnforcementEnds || null,
+          enforcementType: lock.enforcementType,
+        };
+      }
+      return null;
+    } catch (err: any) {
+      console.error(`[BaileysEngine] Gagal fetch reachout timelock ${sessionId}:`, err?.message || err);
+      return null;
+    }
+  }
 
   /** Emulasi presence manusia: composing (sedang mengetik), paused, atau available */
   async sendPresence(sessionId: string, jid: string, presence: 'composing' | 'paused' | 'available'): Promise<void> {

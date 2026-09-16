@@ -66,6 +66,7 @@ app.addHook('onResponse', async (req, reply) => {
 const engine = new BaileysEngine([]);
 const manager = new SessionManager(engine);
 engine.on463Callback = (sessionId) => manager.record463(sessionId);
+engine.onTimelockUpdateCallback = (sessionId, data) => manager.handleTimelockUpdate(sessionId, data);
 engine.onDisconnectCallback = (sessionId) => manager.onDisconnect(sessionId);
 engine.onReconnectCallback = (sessionId) => manager.onReconnect(sessionId);
 engine.onIncomingCallback = (sessionId, jid) => manager.onIncoming(sessionId, jid);

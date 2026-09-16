@@ -23,6 +23,8 @@ export interface WhatsAppEngine {
   checkOnWhatsApp?(sessionId: string, phone: string): Promise<{ exists: boolean; jid?: string }>;
   /** Kirim sinyal typing presence (composing / paused / available) untuk human emulation */
   sendPresence?(sessionId: string, jid: string, presence: 'composing' | 'paused' | 'available'): Promise<void>;
+  /** Ambil status timelock reachout akun dari WhatsApp (error 463 / W-Mex query) */
+  fetchReachoutTimelock?(sessionId: string): Promise<{ isActive?: boolean; timeEnforcementEnds?: Date | null; enforcementType?: string } | null>;
 }
 
 /** Mock engine — mensimulasikan delay jitter anti-ban & status. */
