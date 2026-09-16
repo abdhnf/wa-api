@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
- Activity, ShieldAlert, Zap, Pause, Play, RefreshCw,
- CheckCircle2, CheckCheck, Clock, AlertTriangle, Send, Sliders, Loader2,
- FileText, Image as ImageIcon, MapPin, Users,
- ArrowUpRight, ShieldCheck, UserCheck, Radio, Sparkles, Settings2, HelpCircle, ChevronDown, ChevronUp, ChevronLeft, ChevronRight
+  Activity, ShieldAlert, Zap, Pause, Play, RefreshCw,
+  CheckCircle2, CheckCheck, Clock, AlertTriangle, Send, Sliders, Loader2,
+  FileText, Image as ImageIcon, MapPin, Users, XCircle,
+  ArrowUpRight, ShieldCheck, UserCheck, Radio, Sparkles, Settings2, HelpCircle, ChevronDown, ChevronUp, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { type QueueItem, type Session, EMPTY_SESSIONS, EMPTY_QUEUE } from '../dummyData';
 import { apiGetSessions, apiGetSessionMessages, apiSendBulk, apiGetAntiBan, apiUpdateAntiBan, apiResetReplyRatioCooldown, apiRetryMessage, apiGetQueueStatus, apiPauseQueue, apiResumeQueue, apiUpdateSessionProfile } from '../api';
@@ -303,62 +303,74 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  };
 
  const getStatusBadge = (status: QueueItem['status']) => {
- switch (status) {
- case 'delivered':
- return (
- <span className="inline-flex items-center gap-1 text-[11px] text-pine bg-pine-wash/60 px-2 py-0.5 rounded border border-pine-line/50">
- <CheckCircle2 size={12} /> Delivered
- </span>
- );
- case 'sending':
- return (
- <span className="inline-flex items-center gap-1 text-[11px] text-sea bg-sea-wash/60 px-2 py-0.5 rounded border border-sea-line/50 animate-pulse">
- <Zap size={12} /> Transmitting
- </span>
- );
- case 'pacing':
- return (
- <span className="inline-flex items-center gap-1 text-[11px] text-honey bg-honey-wash/60 px-2 py-0.5 rounded border border-honey-line/50">
- <Clock size={12} /> Anti-Ban Pacing
- </span>
- );
- case 'pending':
- return (
- <span className="inline-flex items-center gap-1 text-[11px] text-ink-muted bg-surface-sunken px-2 py-0.5 rounded border border-line">
- Queued
- </span>
- );
- case 'failed':
- return (
- <span className="inline-flex items-center gap-1 text-[11px] text-clay bg-clay-wash/60 px-2 py-0.5 rounded border border-clay-line/50">
- <AlertTriangle size={12} /> Blocked/Failed
- </span>
- );
- case 'sent':
- return (
- <span className="inline-flex items-center gap-1 text-[11px] text-sea bg-sea-wash/60 px-2 py-0.5 rounded border border-sea-line/50">
- <Send size={12} /> Sent (Server)
- </span>
- );
- case 'read':
- return (
- <span className="inline-flex items-center gap-1 text-[11px] text-sea bg-sea-wash/60 px-2 py-0.5 rounded border border-sea-line/50">
- <CheckCheck size={12} /> Read
- </span>
- );
- case 'invalid_number':
- return (
- <span className="inline-flex items-center gap-1 text-[11px] text-honey bg-honey-wash/60 px-2 py-0.5 rounded border border-honey-line/50">
- <AlertTriangle size={12} /> Invalid Number
- </span>
- );
- case 'not_registered':
- return (
- <span className="inline-flex items-center gap-1 text-[11px] text-clay bg-clay-wash/60 px-2 py-0.5 rounded border border-clay-line/50">
- <AlertTriangle size={12} /> Not Registered
- </span>
- );
- }
+   switch (status) {
+     case 'delivered':
+       return (
+         <span className="inline-flex items-center gap-1 text-[11px] text-pine bg-pine-wash/60 px-2 py-0.5 rounded border border-pine-line/50">
+           <CheckCircle2 size={12} /> Sampai
+         </span>
+       );
+     case 'sending':
+       return (
+         <span className="inline-flex items-center gap-1 text-[11px] text-sea bg-sea-wash/60 px-2 py-0.5 rounded border border-sea-line/50 animate-pulse">
+           <Zap size={12} /> Sedang Dikirim
+         </span>
+       );
+     case 'pacing':
+       return (
+         <span className="inline-flex items-center gap-1 text-[11px] text-honey bg-honey-wash/60 px-2 py-0.5 rounded border border-honey-line/50">
+           <Clock size={12} /> Jeda Anti-Ban
+         </span>
+       );
+     case 'pending':
+       return (
+         <span className="inline-flex items-center gap-1 text-[11px] text-honey bg-honey-wash/60 px-2 py-0.5 rounded border border-honey-line/50">
+           <Clock size={12} /> Antrean Gateway
+         </span>
+       );
+     case 'cancelled':
+       return (
+         <span className="inline-flex items-center gap-1 text-[11px] text-ink-muted bg-surface-sunken px-2 py-0.5 rounded border border-line">
+           <XCircle size={12} /> Dibatalkan
+         </span>
+       );
+     case 'failed':
+       return (
+         <span className="inline-flex items-center gap-1 text-[11px] text-clay bg-clay-wash/60 px-2 py-0.5 rounded border border-clay-line/50">
+           <AlertTriangle size={12} /> Gagal
+         </span>
+       );
+     case 'sent':
+       return (
+         <span className="inline-flex items-center gap-1 text-[11px] text-sea bg-sea-wash/60 px-2 py-0.5 rounded border border-sea-line/50">
+           <Send size={12} /> Terkirim
+         </span>
+       );
+     case 'read':
+       return (
+         <span className="inline-flex items-center gap-1 text-[11px] text-sea bg-sea-wash/60 px-2 py-0.5 rounded border border-sea-line/50">
+           <CheckCheck size={12} /> Dibaca
+         </span>
+       );
+     case 'invalid_number':
+       return (
+         <span className="inline-flex items-center gap-1 text-[11px] text-honey bg-honey-wash/60 px-2 py-0.5 rounded border border-honey-line/50">
+           <AlertTriangle size={12} /> Nomor Invalid
+         </span>
+       );
+     case 'not_registered':
+       return (
+         <span className="inline-flex items-center gap-1 text-[11px] text-clay bg-clay-wash/60 px-2 py-0.5 rounded border border-clay-line/50">
+           <AlertTriangle size={12} /> Tidak Terdaftar
+         </span>
+       );
+     default:
+       return (
+         <span className="inline-flex items-center gap-1 text-[11px] text-ink-muted bg-surface-sunken px-2 py-0.5 rounded border border-line">
+           {status}
+         </span>
+       );
+   }
  };
 
  const getModeIcon = (mode: string) => {

@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
- Send, Smartphone, Zap, ShieldCheck, CheckCircle2, Clock, AlertTriangle,
- FileText, Image as ImageIcon, MapPin, Users, Download, Upload,
- Paperclip, RefreshCw, X, Loader2, Bold, Italic, Strikethrough,
- Code, Smile, CheckCheck, ChevronLeft, ChevronRight
+  Send, Smartphone, Zap, ShieldCheck, CheckCircle2, Clock, AlertTriangle,
+  FileText, Image as ImageIcon, MapPin, Users, Download, Upload,
+  Paperclip, RefreshCw, X, XCircle, Loader2, Bold, Italic, Strikethrough,
+  Code, Smile, CheckCheck, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import {
- apiSendMessage, apiSendMedia, apiSendLocation, apiSendBulk,
- apiGetSessions, apiGetSessionMessages, apiGetAutoRotateStatus
+  apiSendMessage, apiSendMedia, apiSendLocation, apiSendBulk,
+  apiGetSessions, apiGetSessionMessages, apiGetAutoRotateStatus
 } from '../api';
 import { Toast } from './Toast';
 import waChatDoodle from '../assets/wa-chat-doodle.png';
@@ -15,11 +15,11 @@ import waChatDoodle from '../assets/wa-chat-doodle.png';
 type PlaygroundMode = 'text' | 'media' | 'location' | 'bulk';
 
 interface MessageLog {
- id: string;
- recipient: string;
- mode: string;
- status: 'pending' | 'pacing' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'invalid_number' | 'not_registered';
- errorDetail?: string;
+  id: string;
+  recipient: string;
+  mode: string;
+  status: 'pending' | 'pacing' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'invalid_number' | 'not_registered' | 'cancelled';
+  errorDetail?: string;
  delay: string;
  timestamp: string;
  detail?: string;
@@ -1090,33 +1090,45 @@ export const Playground: React.FC = () => {
  <td className="p-3.5 font-mono text-ink-muted">{log.delay}</td>
  <td className="p-3.5 whitespace-nowrap">
  {log.status === 'delivered' ? (
- <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-pine-wash/60 text-pine border border-pine-line/50">
- <CheckCircle2 className="w-3.5 h-3.5" /> Terkirim (Delivered)
- </span>
+   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-pine-wash/60 text-pine border border-pine-line/50">
+     <CheckCircle2 className="w-3.5 h-3.5" /> Sampai (Delivered)
+   </span>
  ) : log.status === 'read' ? (
- <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-sea-wash/60 text-sea border border-sea-line/50">
- <CheckCheck className="w-3.5 h-3.5" /> Dibaca (Read)
- </span>
+   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-sea-wash/60 text-sea border border-sea-line/50">
+     <CheckCheck className="w-3.5 h-3.5" /> Dibaca (Read)
+   </span>
  ) : log.status === 'sent' ? (
- <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-sea-wash/60 text-sea border border-sea-line/50">
- <Send className="w-3.5 h-3.5" /> Terkirim ke Server (Sent)
- </span>
+   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-sea-wash/60 text-sea border border-sea-line/50">
+     <Send className="w-3.5 h-3.5" /> Terkirim (Sent)
+   </span>
+ ) : log.status === 'sending' ? (
+   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-sea-wash/60 text-sea border border-sea-line/50 animate-pulse">
+     <Zap className="w-3.5 h-3.5" /> Sedang Dikirim
+   </span>
+ ) : log.status === 'pacing' ? (
+   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-honey-wash/60 text-honey border border-honey-line/50">
+     <Clock className="w-3.5 h-3.5 animate-spin" /> Jeda Anti-Ban (Pacing)
+   </span>
+ ) : log.status === 'cancelled' ? (
+   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-surface-sunken text-ink-muted border border-line" title={log.errorDetail || 'Dibatalkan oleh pengguna'}>
+     <XCircle className="w-3.5 h-3.5" /> Dibatalkan
+   </span>
  ) : log.status === 'failed' ? (
- <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-clay-wash/60 text-clay border border-clay-line/50">
- <AlertTriangle className="w-3.5 h-3.5" /> Gagal
- </span>
+   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-clay-wash/60 text-clay border border-clay-line/50" title={log.errorDetail || 'Pengiriman gagal'}>
+     <AlertTriangle className="w-3.5 h-3.5" /> Gagal
+   </span>
  ) : log.status === 'invalid_number' ? (
- <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-honey-wash/60 text-honey border border-honey-line/50">
- <AlertTriangle className="w-3.5 h-3.5" /> Nomor Tidak Valid
- </span>
+   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-honey-wash/60 text-honey border border-honey-line/50" title={log.errorDetail || 'Nomor tidak valid'}>
+     <AlertTriangle className="w-3.5 h-3.5" /> Nomor Tidak Valid
+   </span>
  ) : log.status === 'not_registered' ? (
- <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-clay-wash/60 text-clay border border-clay-line/50">
- <AlertTriangle className="w-3.5 h-3.5" /> Tidak Terdaftar di WA
- </span>
+   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-clay-wash/60 text-clay border border-clay-line/50" title={log.errorDetail || 'Tidak terdaftar di WhatsApp'}>
+     <AlertTriangle className="w-3.5 h-3.5" /> Tidak Terdaftar di WA
+   </span>
  ) : (
- <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-honey-wash/60 text-honey border border-honey-line/50">
- <Clock className="w-3.5 h-3.5 animate-spin" /> Menunggu Pacing (Pending)
- </span>
+   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-honey-wash/60 text-honey border border-honey-line/50">
+     <Clock className="w-3.5 h-3.5" /> Antrean Gateway (Pending)
+   </span>
  )}
  </td>
  </tr>

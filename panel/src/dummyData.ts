@@ -41,7 +41,7 @@ export interface QueueItem {
   recipient: string;
   text: string;
   mode: 'text' | 'media' | 'location';
-  status: 'pending' | 'pacing' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'invalid_number' | 'not_registered';
+  status: 'pending' | 'pacing' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'invalid_number' | 'not_registered' | 'cancelled';
   errorDetail?: string;
   jitterDelayMs: number;
   remainingDelayMs?: number;
