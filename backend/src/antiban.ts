@@ -23,6 +23,7 @@ export interface AntiBanState {
     isActive: boolean;
     expiresAt: number | null;
     errorCount: number;
+    enforcementType?: string | null;
     knownChats: string[];
   };
   reconnect?: any;
@@ -433,6 +434,9 @@ export class TimelockGuard {
       this.isActive = state.isActive;
       this.expiresAt = state.expiresAt;
       this.errorCount = state.errorCount;
+      // Dipulihkan agar tipe sanksi (BIZ_QUALITY, WEB_COMPANION_ONLY, dst) tidak
+      // hilang dari pesan reason setelah service restart.
+      this.enforcementType = state.enforcementType ?? null;
       state.knownChats.forEach(jid => this.knownChats.add(jid));
     }
   }
