@@ -50,6 +50,13 @@ export interface AntiBanConfig {
   resumeBufferMs: number;
   typingWPM: number;
   typingWPMStdDev: number;
+  /**
+   * Konfigurasi ContactGraphWarmer. Dulu guard ini dibangun dengan `cfg` utuh
+   * (AntiBanConfig) yang tidak punya field apa pun milik contactGraph, sehingga
+   * seluruh isinya selalu jatuh ke DEFAULT_CONTACT_GRAPH_CONFIG dan setiap
+   * perubahan dari preset/panel dibuang diam-diam.
+   */
+  contactGraph?: ContactGraphConfig;
 }
 
 export const DEFAULT_ANTIBAN_CONFIG: AntiBanConfig = {
@@ -62,6 +69,10 @@ export const DEFAULT_ANTIBAN_CONFIG: AntiBanConfig = {
   maxIdenticalMessages: 3,
   burstAllowance: 3,
   distraction: true,
+  // Contact graph default: NONAKTIF. Mengaktifkannya memblokir pesan pertama ke
+  // setiap kontak baru selama handshakeMinDelayMs — mematikan blast. Hanya boleh
+  // dinyalakan untuk sesi chat interaktif, bukan sesi blast.
+  contactGraph: { enabled: false },
   warmupDays: 7,
   day1Limit: 20,
   growthFactor: 1.8,
@@ -77,6 +88,8 @@ export interface AntiBanPreset {
   description: string;
   rateLimiter: Partial<AntiBanConfig>;
   replyRatio: Partial<ReplyRatioConfig>;
+  /** Konfigurasi contact graph per preset. Wajib dideklarasikan eksplisit. */
+  contactGraph?: Partial<ContactGraphConfig>;
 }
 
 export const ANTIBAN_PRESETS: Record<string, AntiBanPreset> = {
@@ -98,6 +111,8 @@ export const ANTIBAN_PRESETS: Record<string, AntiBanPreset> = {
       minMessagesBeforeEnforce: 5,
       cooldownHoursOnViolation: 24,
     },
+    // Nomor penting / pribadi: wajib handshake ke kontak baru.
+    contactGraph: { enabled: true, handshakeMinDelayMs: 3_600_000, maxStrangerMessagesPerDay: 5 },
   },
   balanced: {
     id: 'balanced',
@@ -117,6 +132,11 @@ export const ANTIBAN_PRESETS: Record<string, AntiBanPreset> = {
       minMessagesBeforeEnforce: 5,
       cooldownHoursOnViolation: 24,
     },
+    // SENGAJA NONAKTIF. Ketiga sesi produksi berjalan pada preset ini; menyalakan
+    // contactGraph di sini akan langsung memblokir blast ke kontak baru begitu
+    // di-deploy, tanpa peringatan. Nilai handshake 5 menit disiapkan agar tinggal
+    // diaktifkan setelah ada keputusan eksplisit + uji blast kecil.
+    contactGraph: { enabled: false, handshakeMinDelayMs: 300_000, maxStrangerMessagesPerDay: 50 },
   },
   broadcast: {
     id: 'broadcast',
@@ -136,6 +156,8 @@ export const ANTIBAN_PRESETS: Record<string, AntiBanPreset> = {
       minMessagesBeforeEnforce: 999999,
       cooldownHoursOnViolation: 0,
     },
+    // Blast memang mengirim ke kontak baru — handshake akan memacetkannya total.
+    contactGraph: { enabled: false },
   },
 };
 
@@ -1008,6 +1030,19 @@ export class ContactGraphWarmer {
     this.groups.set(groupJid, { joinedAt: Date.now() });
   }
 
+  /**
+   * Terapkan konfigurasi baru tanpa membuang state kontak yang sudah terkumpul.
+   * Dipakai saat operator mengganti preset anti-ban.
+   */
+  updateConfig(config: Partial<ContactGraphConfig>): void {
+    this.config = { ...this.config, ...config };
+  }
+
+  /** Konfigurasi yang sedang aktif (untuk ditampilkan di panel). */
+  getConfig(): Required<ContactGraphConfig> {
+    return { ...this.config };
+  }
+
   /** Sisa jeda handshake/lurk untuk sebuah kontak (ms). 0 = boleh kirim. */
   remainingMs(jid: string): number {
     // Guard dimatikan -> tidak pernah memblokir, jangan jadwalkan auto-resume.
@@ -1119,7 +1154,7 @@ export class ContactGraphWarmer {
   }
 }
 
-interface ContactGraphConfig {
+export interface ContactGraphConfig {
   enabled?: boolean;
   requireHandshakeBeforeGroupSend?: boolean;
   handshakeMinDelayMs?: number;
@@ -1135,7 +1170,7 @@ interface GraphContactRecord {
 interface GroupRecord {
   joinedAt: number;
 }
-const DEFAULT_CONTACT_GRAPH_CONFIG: Required<ContactGraphConfig> = {
+export const DEFAULT_CONTACT_GRAPH_CONFIG: Required<ContactGraphConfig> = {
   enabled: false, // opt-in: kalau true, pesan pertama ke kontak baru diblokir sampai handshake
   requireHandshakeBeforeGroupSend: true,
   handshakeMinDelayMs: 3600000, // 1 jam

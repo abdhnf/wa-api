@@ -13,7 +13,7 @@ function validatePhoneFormat(phone: string): { valid: boolean; normalized: strin
 
 import { config } from './config.js';
 import { upsertSession, insertMessage, updateMessageStatus, getMessageById, listSessions as dbListSessions, getAntiBanState, saveAntiBanState, getSessionAntiBanSettings, saveSessionAntiBanSettings, getSetting, getUserSetting, getLastSessionForRecipient, resetStuckMessages, getPendingMessages, updateSessionProfile, loadQueuePauseState, saveQueuePauseState } from './db.js';
-import { RateLimiter, WarmUp, TimelockGuard, PresenceChoreographer, ReconnectThrottle, BanRecoveryOrchestrator, ReplyRatioGuard, ContactGraphWarmer, DEFAULT_ANTIBAN_CONFIG, ANTIBAN_PRESETS, type AntiBanPreset, type AntiBanState } from './antiban.js';
+import { RateLimiter, WarmUp, TimelockGuard, PresenceChoreographer, ReconnectThrottle, BanRecoveryOrchestrator, ReplyRatioGuard, ContactGraphWarmer, DEFAULT_ANTIBAN_CONFIG, DEFAULT_CONTACT_GRAPH_CONFIG, ANTIBAN_PRESETS, type AntiBanPreset, type AntiBanState } from './antiban.js';
 import type { OutboundMessage, SessionInfo, QueueSessionStatus } from './types.js';
 import type { WhatsAppEngine } from './engine/WhatsAppEngine.js';
 import { DeliveryMetrics, type SessionMetricsReport } from './metrics.js';
@@ -77,6 +77,14 @@ export class SessionManager {
       console.warn(`[session:${sessionId}] antiban_state korup, reset:`, e);
     }
 
+    // Preset + override custom untuk contact graph. Sebelumnya guard ini selalu
+    // menerima `cfg` (AntiBanConfig) yang tidak punya field contactGraph sama
+    // sekali, sehingga isinya selalu jatuh ke default dan perubahan dibuang.
+    let contactGraphConfig = activePreset?.contactGraph || {};
+    if (sessionSettings.config?.contactGraph) {
+      contactGraphConfig = { ...contactGraphConfig, ...sessionSettings.config.contactGraph };
+    }
+
     let replyRatioConfig = activePreset ? activePreset.replyRatio : {};
     if (sessionSettings.config?.replyRatio) {
       replyRatioConfig = { ...replyRatioConfig, ...sessionSettings.config.replyRatio };
@@ -90,7 +98,7 @@ export class SessionManager {
       reconnect: new ReconnectThrottle(cfg),
       recovery: new BanRecoveryOrchestrator(cfg),
       replyRatio: new ReplyRatioGuard(replyRatioConfig),
-      contactGraph: new ContactGraphWarmer(cfg),
+      contactGraph: new ContactGraphWarmer(contactGraphConfig),
     };
     if (state?.rateLimiter) {
       // restore sliding window & known chats
@@ -660,6 +668,7 @@ export class SessionManager {
         currentConfig: {
           rateLimiter: ab.rateLimiter.getConfig(),
           replyRatio: ab.replyRatio.getConfig(),
+          contactGraph: ab.contactGraph.getConfig(),
         },
         warmup: ab.warmup.getStatus(),
         rateLimiter: ab.rateLimiter.getStats(),
@@ -695,6 +704,18 @@ export class SessionManager {
       mergedReplyRatio = { ...mergedReplyRatio, ...customConfig.replyRatio };
     }
     ab.replyRatio.updateConfig(mergedReplyRatio);
+
+    // Terapkan contact graph agar perubahan preset benar-benar sampai ke guard.
+    // Tanpa ini, memilih preset 'broadcast' tidak akan mematikan handshake dan
+    // memilih 'strict' tidak akan menyalakannya.
+    let mergedContactGraph = {
+      ...DEFAULT_CONTACT_GRAPH_CONFIG,
+      ...(targetPreset?.contactGraph || {}),
+    };
+    if (customConfig?.contactGraph) {
+      mergedContactGraph = { ...mergedContactGraph, ...customConfig.contactGraph };
+    }
+    ab.contactGraph.updateConfig(mergedContactGraph);
 
     // Jika preset broadcast atau dinonaktifkan, bersihkan cooldown lama yang tersangkut
     if (preset === 'broadcast' || mergedReplyRatio.enabled === false) {
