@@ -305,7 +305,7 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  try {
  await apiRevokeBatchApproval(selectedSessionId, bid, jid.replace(/@s\.whatsapp\.net$/, ''));
  await handleLoadBatchApproval(bid);
- showToast('Nomor dikeluarkan dari whitelist — akan melewati handshake.');
+ showToast('Nomor dikeluarkan dari whitelist — wajib handshake lagi.');
  } catch (err: any) {
  showToast(`Gagal cabut nomor: ${err.message}`, 'error');
  } finally {
