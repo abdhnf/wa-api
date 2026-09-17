@@ -1007,73 +1007,78 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
 
  {/* Delivery Queue Table */}
  <div className="bg-surface border border-line rounded-md overflow-hidden">
- <div className="p-4 border-b border-line flex items-center justify-between">
- <div>
- <h3 className="text-sm font-bold text-ink flex items-center gap-2">
- <Zap size={14} className="text-pine" />
- Delivery Queue — {selectedSession?.name || 'Semua Session'}
- </h3>
- <p className="text-[11px] text-ink-faint mt-0.5">Data asli dari backend (SQLite) — status berubah realtime sesuai delivery receipt WhatsApp.</p>
- </div>
- <div className="flex items-center gap-2">
- {queueStatus?.isPaused ? (
- <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-honey-wash/60 border border-honey-line/80 text-honey-deep">
- <Pause size={12} />
- Dijeda ({queueStatus.pauseReason || 'Manual'})
- </span>
- ) : (
- <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-pine-wash/50 border border-pine-line/60 text-pine">
- <Play size={12} />
- Antrean Berjalan
- </span>
- )}
+   <div className="p-3.5 sm:p-4 border-b border-line flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+     <div className="min-w-0">
+       <h3 className="text-sm font-bold text-ink flex items-center gap-2">
+         <Zap size={14} className="text-pine shrink-0" />
+         <span className="truncate">Delivery Queue — {selectedSession?.name || 'Semua Session'}</span>
+       </h3>
+       <p className="text-[11px] text-ink-faint mt-0.5 leading-relaxed">Data asli dari backend (SQLite) — status berubah realtime sesuai delivery receipt WhatsApp.</p>
+     </div>
 
- <button
- type="button"
- onClick={handleToggleQueuePause}
- disabled={pausingQueue || !selectedSessionId}
- className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50 ${
- queueStatus?.isPaused
- ? 'bg-pine hover:bg-pine-soft text-surface'
- : 'bg-honey hover:bg-honey text-surface'
- }`}
- >
- {pausingQueue ? (
- <Loader2 size={12} className="animate-spin" />
- ) : queueStatus?.isPaused ? (
- <>
- <Play size={12} />
- Lanjutkan Antrean
- </>
- ) : (
- <>
- <Pause size={12} />
- Jeda Antrean
- </>
- )}
- </button>
+     <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2.5 pt-1 lg:pt-0 border-t lg:border-t-0 border-line/60">
+       {/* Action & Status Controls */}
+       <div className="flex items-center gap-2">
+         {queueStatus?.isPaused ? (
+           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-honey-wash/60 border border-honey-line/80 text-honey-deep whitespace-nowrap">
+             <Pause size={12} />
+             Dijeda ({queueStatus.pauseReason || 'Manual'})
+           </span>
+         ) : (
+           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-pine-wash/50 border border-pine-line/60 text-pine whitespace-nowrap">
+             <Play size={12} />
+             Antrean Berjalan
+           </span>
+         )}
 
- <div className="flex items-center gap-2 text-xs text-ink-muted">
-   <span>Tampilkan:</span>
-   <select
-     value={queueLimit}
-     onChange={(e) => {
-       setQueueLimit(Number(e.target.value));
-       setQueuePage(1);
-     }}
-     className="h-7 px-2 text-xs rounded-md bg-surface-alt border border-line text-ink font-medium focus:outline-none focus:border-pine cursor-pointer"
-   >
-     <option value={10}>10 baris</option>
-     <option value={25}>25 baris</option>
-     <option value={50}>50 baris</option>
-     <option value={100}>100 baris</option>
-   </select>
-   <span className="text-[11px] text-ink-muted bg-surface-sunken px-2.5 py-1 rounded-lg border border-line font-mono">
-     {queueTotal.toLocaleString('id-ID')} pesan
-   </span>
- </div>
- </div>
- </div>
+         <button
+           type="button"
+           onClick={handleToggleQueuePause}
+           disabled={pausingQueue || !selectedSessionId}
+           className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50 whitespace-nowrap ${
+             queueStatus?.isPaused
+               ? 'bg-pine hover:bg-pine-soft text-surface'
+               : 'bg-honey hover:bg-honey text-surface'
+           }`}
+         >
+           {pausingQueue ? (
+             <Loader2 size={12} className="animate-spin" />
+           ) : queueStatus?.isPaused ? (
+             <>
+               <Play size={12} />
+               Lanjutkan Antrean
+             </>
+           ) : (
+             <>
+               <Pause size={12} />
+               Jeda Antrean
+             </>
+           )}
+         </button>
+       </div>
+
+       {/* Page Size Selector & Total Messages Counter */}
+       <div className="flex items-center gap-2 text-xs text-ink-muted ml-auto lg:ml-0">
+         <span className="text-[11px] font-medium text-ink-muted whitespace-nowrap">Tampilkan:</span>
+         <select
+           value={queueLimit}
+           onChange={(e) => {
+             setQueueLimit(Number(e.target.value));
+             setQueuePage(1);
+           }}
+           className="h-7.5 px-2 text-xs rounded-md bg-surface-alt border border-line text-ink font-medium focus:outline-none focus:border-pine cursor-pointer"
+         >
+           <option value={10}>10 baris</option>
+           <option value={25}>25 baris</option>
+           <option value={50}>50 baris</option>
+           <option value={100}>100 baris</option>
+         </select>
+         <span className="text-[11px] text-ink-muted bg-surface-sunken px-2.5 py-1 rounded-lg border border-line font-mono whitespace-nowrap">
+           {queueTotal.toLocaleString('id-ID')} pesan
+         </span>
+       </div>
+     </div>
+   </div>
 
  {queue.length === 0 ? (
  <div className="p-10 text-center">
@@ -1141,44 +1146,44 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  )}
 
  {/* Footer Pagination */}
- <div className="p-3 border-t border-line flex flex-col sm:flex-row items-center justify-between gap-3 text-xs bg-surface-sunken/40">
- <div className="text-ink-muted text-[11px]">
- Menampilkan{' '}
- <strong className="text-ink font-mono">
-   {queueTotal === 0 ? 0 : (queuePage - 1) * queueLimit + 1}
- </strong>{' '}
- -{' '}
- <strong className="text-ink font-mono">
-   {Math.min(queuePage * queueLimit, queueTotal)}
- </strong>{' '}
- dari <strong className="text-ink font-mono">{queueTotal.toLocaleString('id-ID')}</strong> pesan
- </div>
+ <div className="p-3 sm:p-3.5 border-t border-line flex flex-col sm:flex-row items-center justify-between gap-3 text-xs bg-surface-sunken/40">
+   <div className="text-ink-muted text-[11px] text-center sm:text-left w-full sm:w-auto">
+     Menampilkan{' '}
+     <strong className="text-ink font-mono">
+       {queueTotal === 0 ? 0 : (queuePage - 1) * queueLimit + 1}
+     </strong>{' '}
+     -{' '}
+     <strong className="text-ink font-mono">
+       {Math.min(queuePage * queueLimit, queueTotal)}
+     </strong>{' '}
+     dari <strong className="text-ink font-mono">{queueTotal.toLocaleString('id-ID')}</strong> pesan
+   </div>
 
- <div className="flex items-center gap-1.5">
- <button
-   type="button"
-   disabled={queuePage <= 1 || loading}
-   onClick={() => setQueuePage((p) => Math.max(1, p - 1))}
-   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-surface border border-line text-ink-muted hover:text-ink disabled:opacity-40 disabled:pointer-events-none transition text-xs font-medium cursor-pointer"
- >
-   <ChevronLeft size={13} />
-   <span>Sebelumnya</span>
- </button>
+   <div className="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto">
+     <button
+       type="button"
+       disabled={queuePage <= 1 || loading}
+       onClick={() => setQueuePage((p) => Math.max(1, p - 1))}
+       className="inline-flex items-center justify-center gap-1 h-8 px-3 rounded-lg bg-surface border border-line text-ink-muted hover:text-ink disabled:opacity-40 disabled:pointer-events-none transition text-xs font-medium cursor-pointer"
+     >
+       <ChevronLeft size={13} />
+       <span>Sebelumnya</span>
+     </button>
 
- <span className="px-2.5 py-1 text-xs font-mono font-semibold text-ink">
-   {queuePage} / {Math.ceil(queueTotal / queueLimit) || 1}
- </span>
+     <span className="px-3 py-1 text-xs font-mono font-semibold text-ink bg-surface-alt/60 rounded-md border border-line/60">
+       {queuePage} / {Math.ceil(queueTotal / queueLimit) || 1}
+     </span>
 
- <button
-   type="button"
-   disabled={queuePage >= (Math.ceil(queueTotal / queueLimit) || 1) || loading}
-   onClick={() => setQueuePage((p) => Math.min(Math.ceil(queueTotal / queueLimit) || 1, p + 1))}
-   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-surface border border-line text-ink-muted hover:text-ink disabled:opacity-40 disabled:pointer-events-none transition text-xs font-medium cursor-pointer"
- >
-   <span>Selanjutnya</span>
-   <ChevronRight size={13} />
- </button>
- </div>
+     <button
+       type="button"
+       disabled={queuePage >= (Math.ceil(queueTotal / queueLimit) || 1) || loading}
+       onClick={() => setQueuePage((p) => Math.min(Math.ceil(queueTotal / queueLimit) || 1, p + 1))}
+       className="inline-flex items-center justify-center gap-1 h-8 px-3 rounded-lg bg-surface border border-line text-ink-muted hover:text-ink disabled:opacity-40 disabled:pointer-events-none transition text-xs font-medium cursor-pointer"
+     >
+       <span>Selanjutnya</span>
+       <ChevronRight size={13} />
+     </button>
+   </div>
  </div>
  </div>
 
