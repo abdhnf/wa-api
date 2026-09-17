@@ -991,6 +991,12 @@ export class ContactGraphWarmer {
   private config: Required<ContactGraphConfig>;
   private contacts = new Map<string, GraphContactRecord>();
   private groups = new Map<string, GroupRecord>();
+  /**
+   * Penerima kampanye yang di-approve. Key = `${batchId}::${jid}` supaya approval
+   * terikat pada satu kampanye: nomor yang lolos di blast A tetap 'stranger' di
+   * pengiriman lain dan tetap wajib handshake.
+   */
+  private batchApprovals = new Map<string, { jid: string; batchId: string; addedAt: number }>();
   private strangerMessagesToday = 0;
   private lastStrangerResetDay = this.getCurrentDay();
 
@@ -998,8 +1004,15 @@ export class ContactGraphWarmer {
     this.config = { ...DEFAULT_CONTACT_GRAPH_CONFIG, ...config };
   }
 
-  canMessage(jid: string): { allowed: boolean; reason?: string; needsHandshake?: boolean } {
+  canMessage(jid: string, batchId?: string | null): { allowed: boolean; reason?: string; needsHandshake?: boolean } {
     if (!this.config.enabled) return { allowed: true };
+
+    // Penerima kampanye yang di-approve boleh lewat. Dicek SEBELUM handshake dan
+    // hanya untuk batchId yang cocok — nomor yang pernah masuk blast lain tetap
+    // wajib handshake di luar konteks kampanye itu.
+    if (this.isBatchApproved(jid, batchId)) return { allowed: true };
+
+    this.pruneExpiredApprovals();
 
     const currentDay = this.getCurrentDay();
     if (currentDay !== this.lastStrangerResetDay) {
@@ -1028,6 +1041,80 @@ export class ContactGraphWarmer {
 
   markGroupJoined(groupJid: string): void {
     this.groups.set(groupJid, { joinedAt: Date.now() });
+  }
+
+  private approvalKey(batchId: string, jid: string): string {
+    return `${batchId}::${jid}`;
+  }
+
+  /** Buang entri whitelist yang sudah melewati TTL agar tidak menumpuk. */
+  private pruneExpiredApprovals(): void {
+    const ttl = this.config.batchApprovalTtlMs;
+    if (!ttl || ttl <= 0) return;
+    const cutoff = Date.now() - ttl;
+    for (const [key, rec] of this.batchApprovals) {
+      if (rec.addedAt < cutoff) this.batchApprovals.delete(key);
+    }
+  }
+
+  /**
+   * Daftarkan penerima sebuah kampanye agar boleh melewati handshake.
+   * Dipanggil otomatis dari enqueue() memakai batchId yang dikirim dashboard.
+   */
+  approveBatchRecipients(jids: string[], batchId: string): number {
+    if (!this.config.batchWhitelist) return 0;
+    let added = 0;
+    const now = Date.now();
+    for (const jid of jids) {
+      if (!jid) continue;
+      const key = this.approvalKey(batchId, jid);
+      if (!this.batchApprovals.has(key)) {
+        this.batchApprovals.set(key, { jid, batchId, addedAt: now });
+        added++;
+      }
+    }
+    return added;
+  }
+
+  /** Apakah jid di-approve untuk batchId tertentu (bukan untuk semua batch). */
+  isBatchApproved(jid: string, batchId?: string | null): boolean {
+    if (!this.config.batchWhitelist) return false;
+    if (!batchId) return false;
+    return this.batchApprovals.has(this.approvalKey(batchId, jid));
+  }
+
+  /** Cabut approval satu nomor pada satu batch (override manual dari operator). */
+  revokeBatchRecipient(jid: string, batchId: string): boolean {
+    return this.batchApprovals.delete(this.approvalKey(batchId, jid));
+  }
+
+  /** Cabut seluruh approval milik satu kampanye. */
+  revokeBatch(batchId: string): number {
+    let removed = 0;
+    for (const [key, rec] of this.batchApprovals) {
+      if (rec.batchId === batchId) { this.batchApprovals.delete(key); removed++; }
+    }
+    return removed;
+  }
+
+  /** Daftar approval, dikelompokkan per batch (untuk panel). */
+  getBatchApprovals(): { batchId: string; count: number; addedAt: number }[] {
+    const grouped = new Map<string, { batchId: string; count: number; addedAt: number }>();
+    for (const rec of this.batchApprovals.values()) {
+      const g = grouped.get(rec.batchId);
+      if (g) { g.count++; g.addedAt = Math.min(g.addedAt, rec.addedAt); }
+      else grouped.set(rec.batchId, { batchId: rec.batchId, count: 1, addedAt: rec.addedAt });
+    }
+    return [...grouped.values()];
+  }
+
+  /** Semua jid yang di-approve pada satu batch. */
+  getBatchRecipients(batchId: string): string[] {
+    const out: string[] = [];
+    for (const rec of this.batchApprovals.values()) {
+      if (rec.batchId === batchId) out.push(rec.jid);
+    }
+    return out;
   }
 
   /**
@@ -1088,6 +1175,7 @@ export class ContactGraphWarmer {
       groups: Array.from(this.groups.entries()),
       strangerMessagesToday: this.strangerMessagesToday,
       lastStrangerResetDay: this.lastStrangerResetDay,
+      batchApprovals: Array.from(this.batchApprovals.entries()),
     };
   }
 
@@ -1097,6 +1185,10 @@ export class ContactGraphWarmer {
     if (state.groups && Array.isArray(state.groups)) this.groups = new Map(state.groups);
     this.strangerMessagesToday = state.strangerMessagesToday ?? 0;
     this.lastStrangerResetDay = state.lastStrangerResetDay ?? this.getCurrentDay();
+    if (state.batchApprovals && Array.isArray(state.batchApprovals)) {
+      this.batchApprovals = new Map(state.batchApprovals);
+      this.pruneExpiredApprovals();
+    }
   }
 
   private checkIndividualMessage(jid: string): { allowed: boolean; reason?: string; needsHandshake?: boolean } {
@@ -1161,6 +1253,15 @@ export interface ContactGraphConfig {
   groupLurkPeriodMs?: number;
   maxStrangerMessagesPerDay?: number;
   autoRegisterOnIncoming?: boolean;
+  /**
+   * Penerima kampanye yang didaftarkan eksplisit (nomor + batchId) boleh melewati
+   * handshake. Tanpa ini, blast selalu diblokir karena seluruh penerimanya adalah
+   * kontak baru. Kuncinya pasangan (batchId, jid) — bukan jid saja — supaya nomor
+   * yang pernah masuk satu blast tidak otomatis lolos di pengiriman lain.
+   */
+  batchWhitelist?: boolean;
+  /** Umur entri whitelist sebelum dibuang (default 7 hari). */
+  batchApprovalTtlMs?: number;
 }
 type ContactState = 'stranger' | 'handshake_sent' | 'handshake_complete' | 'known';
 interface GraphContactRecord {
@@ -1177,4 +1278,6 @@ export const DEFAULT_CONTACT_GRAPH_CONFIG: Required<ContactGraphConfig> = {
   groupLurkPeriodMs: 43200000, // 12 jam
   maxStrangerMessagesPerDay: 5,
   autoRegisterOnIncoming: true,
+  batchWhitelist: true,
+  batchApprovalTtlMs: 7 * 24 * 3600 * 1000, // 7 hari
 };

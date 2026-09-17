@@ -1,5 +1,5 @@
 
-function validatePhoneFormat(phone: string): { valid: boolean; normalized: string; reason?: string } {
+export function validatePhoneFormat(phone: string): { valid: boolean; normalized: string; reason?: string } {
   if (!phone) return { valid: false, normalized: '', reason: 'Nomor telepon tujuan kosong' };
   let clean = phone.replace(/\D/g, '');
   if (clean.startsWith('0')) {
@@ -677,11 +677,40 @@ export class SessionManager {
         reconnectMultiplier: ab.reconnect.multiplier,
         recovery: ab.recovery.exportState(),
         replyRatio: ab.replyRatio.getStats(),
-        contactGraph: ab.contactGraph.getStats(),
+        contactGraph: {
+          ...ab.contactGraph.getStats(),
+          batchApprovals: ab.contactGraph.getBatchApprovals(),
+        },
       };
     } catch (e) {
       return null;
     }
+  }
+
+  /** Daftarkan penerima sebuah kampanye (dipakai dashboard sebelum blast). */
+  approveBatchRecipients(sessionId: string, batchId: string, jids: string[]): { added: number; total: number } {
+    const ab = this.getAntiBan(sessionId);
+    const added = ab.contactGraph.approveBatchRecipients(jids, batchId);
+    return { added, total: ab.contactGraph.getBatchRecipients(batchId).length };
+  }
+
+  /** Cabut approval: satu nomor pada satu batch, atau seluruh batch. */
+  revokeBatchApproval(sessionId: string, batchId: string, jid?: string): { removed: number; total: number } {
+    const ab = this.getAntiBan(sessionId);
+    const removed = jid
+      ? (ab.contactGraph.revokeBatchRecipient(jid, batchId) ? 1 : 0)
+      : ab.contactGraph.revokeBatch(batchId);
+    return { removed, total: ab.contactGraph.getBatchRecipients(batchId).length };
+  }
+
+  /** Status whitelist satu batch (untuk kolom per-nomor di dashboard). */
+  getBatchApprovalStatus(sessionId: string, batchId: string): { batchId: string; count: number; recipients: string[] } {
+    const ab = this.getAntiBan(sessionId);
+    return {
+      batchId,
+      count: ab.contactGraph.getBatchRecipients(batchId).length,
+      recipients: ab.contactGraph.getBatchRecipients(batchId),
+    };
   }
 
   updateAntiBanSettings(sessionId: string, preset: string, customConfig?: any) {
@@ -831,6 +860,19 @@ export class SessionManager {
         const jid = `${msg.to}@s.whatsapp.net`;
         const content = msg.text || msg.caption || '';
 
+        // 3b. Whitelist penerima kampanye.
+        //
+        // Didaftarkan DI SINI, bukan di enqueue(): saat enqueue() nomor masih mentah
+        // (mis. '0811...') sedangkan jid sudah dinormalisasi ('62811...@s.whatsapp.net'),
+        // jadi approval tidak akan pernah cocok. Titik ini menjamin jid identik dengan
+        // yang dipakai canMessage() di bawah.
+        //
+        // Kuncinya pasangan (batchId, jid): nomor yang lolos di satu kampanye tetap
+        // 'stranger' di pengiriman lain dan tetap wajib handshake.
+        if (msg.batchId) {
+          ab.contactGraph.approveBatchRecipients([jid], msg.batchId);
+        }
+
         // 4. Pengecekan Anti-Ban
         //
         // Guard di bawah ini bersifat SEMENTARA: pemblokirannya akan hilang sendiri
@@ -861,7 +903,7 @@ export class SessionManager {
           }
 
           if (!blocked) {
-            const cg = ab.contactGraph.canMessage(jid);
+            const cg = ab.contactGraph.canMessage(jid, msg.batchId);
             if (!cg.allowed) {
               blocked = { reason: `🕸️ ${cg.reason}`, retryInMs: ab.contactGraph.remainingMs(jid) };
             }
