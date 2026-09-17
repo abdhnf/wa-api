@@ -34,7 +34,7 @@ export interface SessionInfo {
 }
 
 export type MessageMode = 'text' | 'media' | 'location';
-export type MessageStatus = 'pending' | 'pacing' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'invalid_number' | 'not_registered' | 'cancelled';
+export type MessageStatus = 'pending' | 'queued' | 'pacing' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'invalid_number' | 'not_registered' | 'cancelled';
 
 export interface OutboundMessage {
   id: string;

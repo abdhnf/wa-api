@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS messages (
   mode TEXT NOT NULL,
   recipient TEXT NOT NULL,
   payload TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
+  status TEXT NOT NULL DEFAULT 'queued',
   jitter_delay_ms INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -540,12 +540,13 @@ export function updateMessageStatus(id: string, status: OutboundMessage['status'
 
 
 export function resetStuckMessages(): number {
-  const res = db.prepare("UPDATE messages SET status = 'pending' WHERE status IN ('pacing', 'sending')").run() as any;
+  const res = db.prepare("UPDATE messages SET status = 'queued' WHERE status IN ('pacing', 'sending')").run() as any;
   return (res && res.changes) ? res.changes : 0;
 }
 
 export function getPendingMessages(sessionId?: string): OutboundMessage[] {
-  let query = "SELECT payload FROM messages WHERE status = 'pending'";
+  // 'pending' tetap diterima untuk baris lama dari sebelum status 'queued' diperkenalkan.
+  let query = "SELECT payload FROM messages WHERE status IN ('queued', 'pending')";
   const params: any[] = [];
   if (sessionId) {
     query += " AND session_id = ?";

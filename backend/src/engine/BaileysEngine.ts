@@ -170,6 +170,14 @@ export class BaileysEngine {
             });
           }
         } catch {}
+
+        // Cek jumlah kontak yang mem-block nomor ini saat connected
+        try {
+          const blocked = await (socket as any).fetchBlocklist?.();
+          if (Array.isArray(blocked)) {
+            this.onBlocklistCallback?.(sessionId, blocked.filter(Boolean).length);
+          }
+        } catch {}
       } else if (u.connection === 'close') {
         const code = (u.lastDisconnect?.error as any)?.output?.statusCode;
         const reason = code === DisconnectReason.loggedOut ? 'logged_out' : 'disconnected';
@@ -549,11 +557,26 @@ export class BaileysEngine {
 
   /** Callback saat server WA menandai reachout restricted (463) */
   on463Callback: ((sessionId: string) => void) | null = null;
+  /** Callback saat jumlah kontak ter-block diperbarui (sinyal reputasi nomor). */
+  onBlocklistCallback: ((sessionId: string, blockedCount: number) => void) | null = null;
   /** Callback saat server WA mengirim update timelock 463 dengan durasi asli */
   onTimelockUpdateCallback: ((sessionId: string, data: { isActive?: boolean; timeEnforcementEnds?: Date | null; enforcementType?: string }) => void) | null = null;
   onDisconnectCallback: ((sessionId: string) => void) | null = null;
   onReconnectCallback: ((sessionId: string) => void) | null = null;
   onIncomingCallback: ((sessionId: string, jid: string) => void) | null = null;
+
+  /** Ambil daftar kontak yang mem-block nomor ini — sinyal reputasi paling langsung. */
+  async fetchBlocklist(sessionId: string): Promise<string[] | null> {
+    const s = this.active.get(sessionId);
+    if (!s || !this.isReady(s)) return null;
+    try {
+      const list = await (s.socket as any).fetchBlocklist?.();
+      return Array.isArray(list) ? list.filter(Boolean) : null;
+    } catch (err: any) {
+      console.error(`[BaileysEngine] Gagal fetch blocklist ${sessionId}:`, err?.message || err);
+      return null;
+    }
+  }
 
   /** Query proaktif status timelock akun dari server WhatsApp via W-Mex */
   async fetchReachoutTimelock(sessionId: string): Promise<{ isActive?: boolean; timeEnforcementEnds?: Date | null; enforcementType?: string } | null> {
