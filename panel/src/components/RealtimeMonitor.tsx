@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Activity, ShieldAlert, Zap, Pause, Play, RefreshCw,
   CheckCircle2, CheckCheck, Clock, AlertTriangle, Send, Sliders, Loader2,
   FileText, Image as ImageIcon, MapPin, Users, XCircle,
-  ArrowUpRight, ShieldCheck, UserCheck, Radio, Sparkles, Settings2, HelpCircle, ChevronDown, ChevronUp, ChevronLeft, ChevronRight
+  ArrowUpRight, ShieldCheck, UserCheck, Radio, Sparkles, Settings2, HelpCircle, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
+  Search
 } from 'lucide-react';
 import { type QueueItem, type Session, EMPTY_SESSIONS, EMPTY_QUEUE } from '../dummyData';
 import { apiGetSessions, apiGetSessionMessages, apiSendBulk, apiGetAntiBan, apiUpdateAntiBan, apiResetReplyRatioCooldown, apiRetryMessage, apiGetQueueStatus, apiPauseQueue, apiResumeQueue, apiUpdateSessionProfile, apiGetBatchApproval, apiApproveBatchRecipients, apiRevokeBatchApproval } from '../api';
@@ -31,6 +32,21 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  const [batchApprovalData, setBatchApprovalData] = useState<{ batchId: string; count: number; recipients: string[] } | null>(null);
  const [batchApprovalInput, setBatchApprovalInput] = useState('');
  const [batchApprovalBusy, setBatchApprovalBusy] = useState(false);
+ const [showContactGraphModal, setShowContactGraphModal] = useState(false);
+ const [recipientSearchQuery, setRecipientSearchQuery] = useState('');
+
+ const detectedCount = useMemo(() => {
+   if (!batchApprovalInput.trim()) return 0;
+   const parts = batchApprovalInput.split(/[\r\n,;\s]+/).filter((p) => p.replace(/\D/g, '').length >= 7);
+   return new Set(parts).size;
+ }, [batchApprovalInput]);
+
+ const filteredRecipients = useMemo(() => {
+   if (!batchApprovalData?.recipients) return [];
+   if (!recipientSearchQuery.trim()) return batchApprovalData.recipients;
+   const q = recipientSearchQuery.trim().toLowerCase();
+   return batchApprovalData.recipients.filter((jid) => jid.toLowerCase().includes(q));
+ }, [batchApprovalData, recipientSearchQuery]);
  const [queueStatus, setQueueStatus] = useState<{ isPaused: boolean; pauseReason?: string; pendingCount: number; priorityPendingCount?: number; vipPendingCount?: number } | null>(null);
  const [pausingQueue, setPausingQueue] = useState(false);
  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -889,117 +905,30 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  </div>
  )}
 
- {/* Daftar batch yang sudah di-whitelist */}
- {Array.isArray(antiBanData?.contactGraph?.batchApprovals) && antiBanData.contactGraph.batchApprovals.length > 0 && (
- <div className="space-y-1 pt-1 border-t border-line">
- <span className="text-[10px] text-ink-faint font-medium">Kampanye di-whitelist</span>
- {antiBanData.contactGraph.batchApprovals.slice(0, 5).map((b: any) => (
- <div key={b.batchId} className="flex items-center justify-between text-[10px] font-mono">
- <span className="text-ink-muted truncate max-w-[60%]" title={b.batchId}>{b.batchId}</span>
- <span className="text-pine">{b.count} penerima</span>
+ {/* Ringkasan status whitelist batch */}
+ <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-line font-mono">
+ <span className="text-ink-faint">Batch Whitelist:</span>
+ <span className={Array.isArray(antiBanData?.contactGraph?.batchApprovals) && antiBanData.contactGraph.batchApprovals.length > 0 ? 'text-pine font-semibold' : 'text-ink-muted'}>
+ {Array.isArray(antiBanData?.contactGraph?.batchApprovals) && antiBanData.contactGraph.batchApprovals.length > 0
+ ? `${antiBanData.contactGraph.batchApprovals.length} kampanye (${antiBanData.contactGraph.batchApprovals.reduce((s: number, b: any) => s + (b.count || 0), 0)} no)`
+ : 'Belum ada'}
+ </span>
  </div>
- ))}
- {antiBanData.contactGraph.batchApprovals.length > 5 && (
- <span className="text-[10px] text-ink-faint">+{antiBanData.contactGraph.batchApprovals.length - 5} kampanye lain</span>
- )}
- </div>
- )}
 
  <p className="text-[10px] text-ink-faint leading-relaxed">
  Pemanasan grafik jejaring sosial WhatsApp: interaksi bertahap di grup sebelum mengirim pesan langsung ke anggota yang belum saling simpan kontak.
  </p>
 
- {/* Pengelolaan whitelist — hanya admin, karena ini menyangkut keamanan pengiriman */}
+ {/* Tombol kelola whitelist via Dedicated Modal (mencegah layout memanjang ke bawah) */}
  {isAdmin && (
- <details className="pt-1 border-t border-line">
- <summary className="text-[10px] text-ink-muted cursor-pointer hover:text-ink select-none">
- Kelola whitelist penerima kampanye
- </summary>
- <div className="space-y-2 pt-2">
- <div className="flex gap-1.5">
- <input
- type="text"
- value={batchApprovalBatchId}
- onChange={(e) => setBatchApprovalBatchId(e.target.value)}
- placeholder="Batch ID"
- className="flex-1 min-w-0 px-2 py-1 text-[11px] font-mono bg-surface border border-line rounded text-ink placeholder:text-ink-faint focus:outline-none focus:border-pine"
- />
  <button
  type="button"
- onClick={() => handleLoadBatchApproval()}
- disabled={batchApprovalBusy || !batchApprovalBatchId.trim()}
- className="px-2 py-1 text-[10px] rounded border border-line text-ink-muted hover:text-ink hover:border-pine transition-colors disabled:opacity-40"
+ onClick={() => setShowContactGraphModal(true)}
+ className="w-full mt-1 py-1.5 px-2 rounded border border-line bg-surface hover:bg-surface-sunken hover:border-pine text-[10px] font-medium text-ink flex items-center justify-center gap-1.5 transition-colors"
  >
- {batchApprovalBusy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+ <ShieldCheck size={12} className="text-pine" />
+ <span>Kelola Whitelist Penerima...</span>
  </button>
- </div>
-
- {batchApprovalData && (
- <div className="flex items-center justify-between text-[10px]">
- <span className="text-ink-muted font-mono truncate max-w-[60%]" title={batchApprovalData.batchId}>
- {batchApprovalData.batchId}
- </span>
- <span className={batchApprovalData.count > 0 ? 'text-pine font-semibold' : 'text-ink-faint'}>
- {batchApprovalData.count} penerima di-whitelist
- </span>
- </div>
- )}
-
- <textarea
- value={batchApprovalInput}
- onChange={(e) => setBatchApprovalInput(e.target.value)}
- rows={2}
- placeholder="628111111111, 628122222222 (pisahkan dengan koma / baris baru)"
- className="w-full px-2 py-1 text-[11px] font-mono bg-surface border border-line rounded text-ink placeholder:text-ink-faint focus:outline-none focus:border-pine resize-y"
- />
-
- <div className="flex items-center gap-1.5">
- <button
- type="button"
- onClick={handleApproveBatch}
- disabled={batchApprovalBusy || !batchApprovalBatchId.trim()}
- className="px-2 py-1 text-[10px] rounded bg-pine text-surface font-semibold hover:opacity-90 transition-opacity disabled:opacity-40"
- >
- Daftarkan
- </button>
- {batchApprovalData && batchApprovalData.count > 0 && (
- <button
- type="button"
- onClick={handleRevokeBatchAll}
- disabled={batchApprovalBusy}
- className="px-2 py-1 text-[10px] rounded border border-line text-ink-muted hover:text-ink hover:border-honey transition-colors disabled:opacity-40"
- >
- Cabut semua
- </button>
- )}
- </div>
-
- {batchApprovalData && batchApprovalData.count > 0 && (
- <div className="max-h-32 overflow-y-auto space-y-0.5 border-t border-line pt-1">
- {batchApprovalData.recipients.map((jid) => (
- <div key={jid} className="flex items-center justify-between text-[10px] font-mono gap-2">
- <span className="text-ink-muted truncate" title={jid}>
- {jid.replace(/@s\.whatsapp\.net$/, '')}
- </span>
- <button
- type="button"
- onClick={() => handleRevokeBatchRecipient(jid)}
- disabled={batchApprovalBusy}
- className="text-ink-faint hover:text-honey transition-colors disabled:opacity-40 shrink-0"
- title="Keluarkan dari whitelist"
- >
- <XCircle size={11} />
- </button>
- </div>
- ))}
- </div>
- )}
-
- <p className="text-[10px] text-ink-faint leading-relaxed">
- Penerima yang didaftarkan hanya lolos handshake <span className="text-ink-muted">pada batch ini</span> — di pengiriman lain nomor yang sama tetap wajib handshake.
- </p>
- </div>
- </details>
  )}
  </div>
  </div>
@@ -1422,6 +1351,238 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  </div>
  </form>
  </div>
+ </div>
+ )}
+
+ {/* Modal Dedicated: Whitelist Penerima Contact Graph */}
+ {showContactGraphModal && (
+ <div 
+   className="fixed inset-0 z-50 bg-ink/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+   onClick={(e) => {
+     if (e.target === e.currentTarget) setShowContactGraphModal(false);
+   }}
+ >
+   <div className="bg-surface border border-line rounded-lg shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+     {/* Modal Header */}
+     <div className="p-4 border-b border-line flex items-center justify-between gap-3 bg-surface-sunken/40">
+       <div className="flex items-center gap-2.5">
+         <div className="p-1.5 rounded-md bg-pine/10 border border-pine/20 text-pine">
+           <ShieldCheck size={20} />
+         </div>
+         <div>
+           <h3 className="text-sm font-bold text-ink flex items-center gap-2">
+             Whitelist Penerima Contact Graph
+           </h3>
+           <p className="text-[11px] text-ink-muted mt-0.5">
+             Sesi: <span className="font-semibold text-ink">{selectedSession?.name || selectedSessionId || 'Semua Sesi'}</span> • Lewati handshake anti-ban per batch kampanye
+           </p>
+         </div>
+       </div>
+       <button
+         type="button"
+         onClick={() => setShowContactGraphModal(false)}
+         className="text-ink-muted hover:text-ink p-1.5 rounded-md hover:bg-surface-sunken transition-colors"
+         title="Tutup (Esc)"
+       >
+         ✕
+       </button>
+     </div>
+
+     {/* Modal Body */}
+     <div className="p-4 overflow-y-auto space-y-4 flex-1">
+       {/* Quick Batch Selector / Kampanye Aktif */}
+       {Array.isArray(antiBanData?.contactGraph?.batchApprovals) && antiBanData.contactGraph.batchApprovals.length > 0 && (
+         <div className="p-3 bg-surface-sunken/60 border border-line rounded-md space-y-2">
+           <div className="flex items-center justify-between">
+             <span className="text-[10px] text-ink-faint font-semibold uppercase tracking-wider">
+               Kampanye Terdaftar dengan Whitelist ({antiBanData.contactGraph.batchApprovals.length})
+             </span>
+             <span className="text-[10px] text-pine font-mono font-medium">
+               {antiBanData.contactGraph.batchApprovals.reduce((s: number, b: any) => s + (b.count || 0), 0)} total nomor
+             </span>
+           </div>
+           <div className="flex flex-wrap gap-1.5">
+             {antiBanData.contactGraph.batchApprovals.map((b: any) => (
+               <button
+                 key={b.batchId}
+                 type="button"
+                 onClick={() => {
+                   setBatchApprovalBatchId(b.batchId);
+                   handleLoadBatchApproval(b.batchId);
+                 }}
+                 className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono border transition-all ${
+                   batchApprovalBatchId === b.batchId
+                     ? 'bg-pine text-surface border-pine font-semibold shadow-sm'
+                     : 'bg-surface border-line text-ink hover:border-pine'
+                 }`}
+               >
+                 <span className="truncate max-w-[150px]">{b.batchId}</span>
+                 <span className={`text-[10px] px-1.5 py-0.2 rounded font-sans ${
+                   batchApprovalBatchId === b.batchId ? 'bg-surface/25 text-surface' : 'bg-surface-sunken text-pine'
+                 }`}>
+                   {b.count} no
+                 </span>
+               </button>
+             ))}
+           </div>
+         </div>
+       )}
+
+       {/* Input Batch ID & Action */}
+       <div className="space-y-1.5">
+         <label className="text-xs font-semibold text-ink flex items-center justify-between">
+           <span>Target Batch ID</span>
+           <span className="text-[10px] text-ink-faint font-normal font-sans">
+             ID kampanye pengiriman blast
+           </span>
+         </label>
+         <div className="flex gap-2">
+           <input
+             type="text"
+             value={batchApprovalBatchId}
+             onChange={(e) => setBatchApprovalBatchId(e.target.value)}
+             placeholder="Masukkan Batch ID (contoh: batch_178959... atau cmp_broadcast)"
+             className="flex-1 min-w-0 px-3 py-1.5 text-xs font-mono bg-surface border border-line rounded-md text-ink placeholder:text-ink-faint focus:outline-none focus:border-pine"
+           />
+           <button
+             type="button"
+             onClick={() => handleLoadBatchApproval()}
+             disabled={batchApprovalBusy || !batchApprovalBatchId.trim()}
+             className="px-3 py-1.5 text-xs font-medium rounded-md border border-line text-ink bg-surface hover:bg-surface-sunken hover:border-pine transition-colors disabled:opacity-40 flex items-center gap-1.5 shrink-0"
+           >
+             {batchApprovalBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+             <span>Muat Nomor</span>
+           </button>
+         </div>
+       </div>
+
+       {/* Form Input Nomor Whitelist Baru */}
+       <div className="p-3.5 border border-line rounded-md bg-surface-sunken/30 space-y-2.5">
+         <div className="flex items-center justify-between">
+           <label className="text-xs font-semibold text-ink">
+             Daftarkan Nomor Penerima Baru
+           </label>
+           {detectedCount > 0 && (
+             <span className="text-[11px] text-pine font-medium font-mono">
+               {detectedCount} nomor terdeteksi
+             </span>
+           )}
+         </div>
+         <textarea
+           value={batchApprovalInput}
+           onChange={(e) => setBatchApprovalInput(e.target.value)}
+           rows={3}
+           placeholder="628111111111, 628122222222&#10;(pisahkan dengan koma, spasi, atau baris baru)"
+           className="w-full px-3 py-2 text-xs font-mono bg-surface border border-line rounded-md text-ink placeholder:text-ink-faint focus:outline-none focus:border-pine resize-y"
+         />
+         <div className="flex items-center justify-between gap-2 flex-wrap pt-0.5">
+           <button
+             type="button"
+             onClick={handleApproveBatch}
+             disabled={batchApprovalBusy || !batchApprovalBatchId.trim() || !batchApprovalInput.trim()}
+             className="px-3.5 py-1.5 text-xs rounded-md bg-pine text-surface font-semibold hover:opacity-90 transition-opacity disabled:opacity-40 flex items-center gap-1.5 shadow-sm"
+           >
+             <CheckCircle2 size={13} />
+             <span>Daftarkan ke Whitelist</span>
+           </button>
+
+           {batchApprovalData && batchApprovalData.count > 0 && (
+             <button
+               type="button"
+               onClick={handleRevokeBatchAll}
+               disabled={batchApprovalBusy}
+               className="px-3 py-1.5 text-xs rounded-md border border-line text-ink-muted hover:text-rose-500 hover:border-rose-500/40 hover:bg-rose-500/5 transition-colors disabled:opacity-40 flex items-center gap-1.5 ml-auto"
+             >
+               <XCircle size={13} />
+               <span>Cabut Seluruh Whitelist Batch Ini</span>
+             </button>
+           )}
+         </div>
+       </div>
+
+       {/* Daftar Nomor Penerima yang Di-whitelist */}
+       {batchApprovalData && (
+         <div className="space-y-2.5 border-t border-line pt-3.5">
+           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+             <div className="flex items-center gap-2">
+               <span className="text-xs font-bold text-ink">
+                 Daftar Nomor Terdaftar:
+               </span>
+               <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full bg-pine/10 text-pine border border-pine/20">
+                 {batchApprovalData.count} penerima
+               </span>
+             </div>
+
+             {/* Filter / Search Input */}
+             {batchApprovalData.count > 0 && (
+               <div className="relative w-full sm:w-56">
+                 <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint" />
+                 <input
+                   type="text"
+                   value={recipientSearchQuery}
+                   onChange={(e) => setRecipientSearchQuery(e.target.value)}
+                   placeholder="Cari nomor telepon..."
+                   className="w-full pl-8 pr-2.5 py-1 text-xs font-mono bg-surface border border-line rounded-md text-ink placeholder:text-ink-faint focus:outline-none focus:border-pine"
+                 />
+               </div>
+             )}
+           </div>
+
+           {batchApprovalData.count === 0 ? (
+             <div className="py-6 text-center text-xs text-ink-faint bg-surface-sunken/40 rounded-md border border-line">
+               Belum ada nomor penerima yang didaftarkan pada batch <span className="font-mono text-ink-muted font-medium">{batchApprovalData.batchId}</span>.
+             </div>
+           ) : (
+             <div className="max-h-56 overflow-y-auto border border-line rounded-md bg-surface p-2 divide-y divide-line/60">
+               {filteredRecipients.length === 0 ? (
+                 <div className="py-5 text-center text-xs text-ink-faint">
+                   Tidak ada nomor yang cocok dengan &quot;{recipientSearchQuery}&quot;
+                 </div>
+               ) : (
+                 filteredRecipients.map((jid) => {
+                   const phone = jid.replace(/@s\.whatsapp\.net$/, '');
+                   return (
+                     <div key={jid} className="py-1.5 px-2.5 flex items-center justify-between text-xs font-mono hover:bg-surface-sunken/50 rounded transition-colors">
+                       <div className="flex items-center gap-2.5">
+                         <span className="text-pine font-medium">+{phone}</span>
+                         <span className="text-[10px] text-ink-faint font-sans px-1.5 py-0.5 bg-surface-sunken rounded border border-line">
+                           Bypass Handshake
+                         </span>
+                       </div>
+                       <button
+                         type="button"
+                         onClick={() => handleRevokeBatchRecipient(jid)}
+                         disabled={batchApprovalBusy}
+                         className="text-ink-faint hover:text-rose-500 p-1 rounded hover:bg-rose-500/10 transition-colors disabled:opacity-40 flex items-center gap-1 text-[11px]"
+                         title="Keluarkan nomor ini dari whitelist"
+                       >
+                         <XCircle size={13} />
+                         <span className="text-[10px] font-sans">Cabut</span>
+                       </button>
+                     </div>
+                   );
+                 })
+               )}
+             </div>
+           )}
+         </div>
+       )}
+     </div>
+
+     {/* Modal Footer */}
+     <div className="p-3 sm:px-4 bg-surface-sunken/60 border-t border-line flex items-center justify-between text-[11px] text-ink-faint">
+       <span className="hidden sm:inline">
+         Penerima yang di-whitelist lolos handshake Contact Graph khusus pada batch ini.
+       </span>
+       <button
+         type="button"
+         onClick={() => setShowContactGraphModal(false)}
+         className="ml-auto px-4 py-1.5 rounded-md border border-line bg-surface text-ink hover:bg-surface-sunken font-medium transition-colors text-xs"
+       >
+         Tutup
+       </button>
+     </div>
+   </div>
  </div>
  )}
 
