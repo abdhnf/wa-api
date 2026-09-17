@@ -6,7 +6,26 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
-## [Unreleased] — branch `fix/antiban-guard-resilience-20260916`
+## [Unreleased] — branch `main`
+
+**Tema:** reflow layout responsif tabel Delivery Queue & paginasi di panel gateway untuk tampilan mobile.
+
+### Fixed
+
+- **Overflow horizontal header Delivery Queue pada viewport mobile** (`panel/src/components/RealtimeMonitor.tsx`).
+  Sebelumnya kontainer header tabel dipaksa dalam satu baris horizontal (`flex items-center justify-between`) tanpa pembungkus (`wrap`). Setelah penambahan selector page size (`10, 25, 50, 100`), lebar konten melebar hingga 540px pada viewport 375px (`scrollWidth: 540` vs `clientWidth: 349`), mengakibatkan judul terhimpit 87px dan tombol kontrol antrean meluap keluar batas kartu.
+  Diperbaiki dengan reflow responsif:
+  - Header utama berubah menjadi susunan bertingkat (`flex-col lg:flex-row lg:items-center justify-between gap-3`).
+  - Toolbar kontrol antrean (tombol Jeda/Lanjut, selector baris per halaman, dan counter badge) dibungkus rapi dengan `flex-wrap gap-2`.
+  - Paginasi footer disesuaikan dengan touch target ergonomis (`h-8 w-8`) dan teks status halaman yang ringkas (`Hal X/Y`) agar muat rapi di satu baris tanpa scroll horizontal.
+
+### Notes for reviewer
+
+- Terverifikasi via Browser CDP live pada viewport 375x812: `header.clientWidth: 349, header.scrollWidth: 349`, zero horizontal overflow. Tampilan desktop (1280px) tetap sejajar horizontal tanpa regresi.
+
+---
+
+## [Merged] — branch `fix/antiban-guard-resilience-20260916`
 
 **Tema:** resiliensi guard anti-ban, auto-resume antrean, persistensi status jeda.
 **Basis:** `570d547` (main). **Belum di-merge ke `main`.**
