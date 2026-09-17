@@ -342,6 +342,39 @@ export async function apiUpdateAntiBan(sessionId: string, data: { preset: string
   });
 }
 
+/**
+ * Whitelist penerima kampanye (contactGraph).
+ *
+ * Penerima blast adalah kontak baru; tanpa didaftarkan, seluruh kampanye akan
+ * tertahan handshake. Approval terikat pada pasangan (batchId, nomor) sehingga
+ * nomor yang lolos di satu kampanye tetap wajib handshake di pengiriman lain.
+ */
+export async function apiGetBatchApproval(sessionId: string, batchId: string) {
+  return request(`/sessions/${sessionId}/contact-graph/batch/${encodeURIComponent(batchId)}`);
+}
+
+export async function apiApproveBatchRecipients(
+  sessionId: string,
+  batchId: string,
+  recipients: string[]
+) {
+  return request(`/sessions/${sessionId}/contact-graph/batch`, {
+    method: 'POST',
+    body: JSON.stringify({ batchId, recipients }),
+  });
+}
+
+export async function apiRevokeBatchApproval(
+  sessionId: string,
+  batchId: string,
+  recipient?: string
+) {
+  return request(`/sessions/${sessionId}/contact-graph/batch/${encodeURIComponent(batchId)}`, {
+    method: 'DELETE',
+    body: JSON.stringify(recipient ? { recipient } : {}),
+  });
+}
+
 export async function apiResetReplyRatioCooldown(sessionId: string, jid?: string) {
   return request(`/sessions/${sessionId}/antiban/reset-cooldown`, {
     method: 'POST',

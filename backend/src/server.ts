@@ -6,7 +6,7 @@ import { createReadStream } from 'node:fs';
 import { mkdir, writeFile, unlink, stat, readFile } from 'node:fs/promises';
 import { join, resolve, extname } from 'node:path';
 import { config } from './config.js';
-import { SessionManager } from './session-manager.js';
+import { SessionManager, validatePhoneFormat } from './session-manager.js';
 import { BaileysEngine } from './engine/BaileysEngine.js';
 import { requireApiKey, requireJwt, requireAdmin, requireAuth } from './auth.js';
 import { hashPassword, verifyPassword, generateApiKey, rateLimitHook, checkLoginBruteForce, recordLoginFailure, recordLoginSuccess, verifyTurnstileToken, getClientIp } from './security.js';
@@ -603,6 +603,102 @@ app.put('/api/v1/sessions/:id/antiban', { preHandler: requireAuth }, async (req,
   } catch (err: any) {
     return reply.code(500).send({ error: err.message || 'Gagal update setting anti-ban' });
   }
+});
+
+/**
+ * Whitelist penerima kampanye (contactGraph).
+ *
+ * Penerima blast adalah kontak baru, jadi tanpa whitelist seluruh blast akan
+ * tertahan handshake selama handshakeMinDelayMs. Endpoint ini mendaftarkan
+ * pasangan (batchId, nomor) sehingga hanya penerima kampanye ITU yang lolos;
+ * nomor yang sama di luar konteks batch tetap wajib handshake.
+ *
+ * GET    /sessions/:id/contact-graph/batch/:batchId  -> status whitelist batch
+ * POST   /sessions/:id/contact-graph/batch           -> daftarkan penerima
+ * DELETE /sessions/:id/contact-graph/batch/:batchId  -> cabut (semua / satu nomor)
+ */
+app.get('/api/v1/sessions/:id/contact-graph/batch/:batchId', { preHandler: requireAuth }, async (req, reply) => {
+  const { id, batchId } = req.params as { id: string; batchId: string };
+  const user = req.apiKeyUser;
+  try {
+    const session = await manager.getSession(id);
+    if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
+      return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
+    }
+  } catch {
+    return reply.code(404).send({ error: 'Session tidak ditemukan' });
+  }
+  const status = manager.getBatchApprovalStatus(id, batchId);
+  return { sessionId: id, ...status };
+});
+
+app.post('/api/v1/sessions/:id/contact-graph/batch', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const user = req.apiKeyUser;
+  try {
+    const session = await manager.getSession(id);
+    if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
+      return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
+    }
+  } catch {
+    return reply.code(404).send({ error: 'Session tidak ditemukan' });
+  }
+
+  const body = (req.body || {}) as { batchId?: string; recipients?: string[] };
+  if (!body.batchId) return reply.code(400).send({ error: 'batchId wajib diisi' });
+  const recipients = Array.isArray(body.recipients) ? body.recipients : [];
+  if (recipients.length === 0) return reply.code(400).send({ error: 'recipients wajib berisi minimal 1 nomor' });
+
+  // Normalisasi WAJIB memakai validator yang sama dengan processQueue().
+  // Implementasi terpisah pernah membuat '0813...' tersimpan sebagai
+  // '0813...@s.whatsapp.net' sementara processQueue memakai '62813...' — approval
+  // tidak akan pernah cocok dan blast tetap terblokir tanpa penjelasan.
+  const jids: string[] = [];
+  const invalid: string[] = [];
+  for (const raw of recipients) {
+    const r = String(raw).trim();
+    if (!r) continue;
+    if (r.includes('@')) { jids.push(r); continue; }
+    const check = validatePhoneFormat(r);
+    if (!check.valid) { invalid.push(r); continue; }
+    jids.push(`${check.normalized}@s.whatsapp.net`);
+  }
+
+  if (jids.length === 0) {
+    return reply.code(400).send({ error: 'Tidak ada nomor valid untuk didaftarkan', invalid });
+  }
+
+  const result = manager.approveBatchRecipients(id, body.batchId, jids);
+  return { success: true, sessionId: id, batchId: body.batchId, ...result, invalid };
+});
+
+app.delete('/api/v1/sessions/:id/contact-graph/batch/:batchId', { preHandler: requireAuth }, async (req, reply) => {
+  const { id, batchId } = req.params as { id: string; batchId: string };
+  const user = req.apiKeyUser;
+  try {
+    const session = await manager.getSession(id);
+    if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
+      return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
+    }
+  } catch {
+    return reply.code(404).send({ error: 'Session tidak ditemukan' });
+  }
+
+  const body = (req.body || {}) as { recipient?: string };
+  let jid: string | undefined;
+  if (body.recipient) {
+    const r = String(body.recipient).trim();
+    if (r.includes('@')) {
+      jid = r;
+    } else {
+      // Validator yang sama dengan processQueue — lihat catatan di endpoint POST.
+      const check = validatePhoneFormat(r);
+      jid = check.valid ? `${check.normalized}@s.whatsapp.net` : undefined;
+    }
+  }
+
+  const result = manager.revokeBatchApproval(id, batchId, jid);
+  return { success: true, sessionId: id, batchId, ...result };
 });
 
 // Reset cooldown Reply Ratio (opsional per target JID atau semua kontak)
