@@ -28,7 +28,7 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 ## [Merged] — branch `fix/antiban-guard-resilience-20260916`
 
 **Tema:** resiliensi guard anti-ban, auto-resume antrean, persistensi status jeda.
-**Basis:** `570d547` (main). **Belum di-merge ke `main`.**
+**Basis:** `570d547` (main). **Sudah di-merge ke `main` dan berjalan di produksi.**
 
 Ringkasan singkat untuk tim dev: sebelumnya 3 dari 4 guard anti-ban membuang pesan
 ke status `failed` permanen saat terpicu, sementara satu-satunya guard yang menahan
