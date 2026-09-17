@@ -16,6 +16,7 @@ import { upsertSession, insertMessage, updateMessageStatus, getMessageById, list
 import { RateLimiter, WarmUp, TimelockGuard, PresenceChoreographer, ReconnectThrottle, BanRecoveryOrchestrator, ReplyRatioGuard, ContactGraphWarmer, DEFAULT_ANTIBAN_CONFIG, ANTIBAN_PRESETS, type AntiBanPreset, type AntiBanState } from './antiban.js';
 import type { OutboundMessage, SessionInfo, QueueSessionStatus } from './types.js';
 import type { WhatsAppEngine } from './engine/WhatsAppEngine.js';
+import { DeliveryMetrics, type SessionMetricsReport } from './metrics.js';
 
 /**
  * SessionManager: orchestrator tiap session WhatsApp.
@@ -139,12 +140,12 @@ export class SessionManager {
     // Kembalikan status menjadi pending, hapus error lama, dan enqueue kembali
     const refreshed: OutboundMessage = {
       ...raw,
-      status: 'pending',
+      status: 'queued',
       errorDetail: undefined,
       timestamp: new Date().toISOString(),
       jitterDelayMs: 0,
     };
-    updateMessageStatus(messageId, 'pending', '', 0);
+    updateMessageStatus(messageId, 'queued', '', 0);
 
     const q = refreshed.priority === 'high' ? this.priorityQueues : this.normalQueues;
     if (!q.has(refreshed.sessionId)) q.set(refreshed.sessionId, []);
@@ -158,7 +159,7 @@ export class SessionManager {
     const full: OutboundMessage = {
       ...msg,
       id: `msg_${crypto.randomUUID().slice(0, 12)}`,
-      status: 'pending',
+      status: 'queued',
       priority,
       jitterDelayMs: 0,
       timestamp: new Date().toISOString(),
@@ -489,6 +490,9 @@ export class SessionManager {
 
   /** Ambil status anti-ban session untuk panel */
   
+  /** Metrik kesehatan pengiriman per sesi (#8 report-rate & #9 baseline). */
+  readonly metrics = new DeliveryMetrics();
+
   private roundRobinIdx = 0;
 
   /**
@@ -923,6 +927,7 @@ export class SessionManager {
           const { messageId } = await this.engine.sendMessage(msg);
           updateMessageStatus(msg.id, 'sent');
           msg.status = 'sent';
+          this.metrics.recordSent(sessionId);
           ab.rateLimiter.record(msg.to, content);
           ab.warmup.record();
           ab.replyRatio.recordSent(jid);
@@ -938,6 +943,7 @@ export class SessionManager {
           const errMsg = err?.message || String(err);
           updateMessageStatus(msg.id, 'failed', errMsg);
           msg.status = 'failed';
+          this.metrics.recordError(sessionId, errMsg);
           if (/463|reachout|restricted/i.test(errMsg)) {
             await this.record463(sessionId);
             ab.recovery.reportError('timelock', errMsg);

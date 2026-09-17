@@ -67,6 +67,7 @@ const engine = new BaileysEngine([]);
 const manager = new SessionManager(engine);
 engine.on463Callback = (sessionId) => manager.record463(sessionId);
 engine.onTimelockUpdateCallback = (sessionId, data) => manager.handleTimelockUpdate(sessionId, data);
+engine.onBlocklistCallback = (sessionId, blockedCount) => manager.metrics.setBlockedContacts(sessionId, blockedCount);
 engine.onDisconnectCallback = (sessionId) => manager.onDisconnect(sessionId);
 engine.onReconnectCallback = (sessionId) => manager.onReconnect(sessionId);
 engine.onIncomingCallback = (sessionId, jid) => manager.onIncoming(sessionId, jid);
@@ -541,6 +542,15 @@ app.get('/api/v1/sessions/:id', { preHandler: requireAuth }, async (req, reply) 
 });
 
 // Status engine anti-ban session (warmup, rate limiter, timelock, circadian)
+app.get('/api/v1/sessions/:id/metrics', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string };
+  return reply.send({ metrics: manager.metrics.getReport(id) });
+});
+
+app.get('/api/v1/metrics', { preHandler: requireAuth }, async (_req, reply) => {
+  return reply.send({ metrics: manager.metrics.getAllReports() });
+});
+
 app.get('/api/v1/sessions/:id/antiban', { preHandler: requireAuth }, async (req, reply) => {
   const { id } = req.params as { id: string };
   const user = req.apiKeyUser;
