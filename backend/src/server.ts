@@ -158,6 +158,11 @@ const sendBulkSchema = z.object({
   sessionId: z.string().min(1),
   batchId: z.string().regex(/^[A-Za-z0-9_-]{3,64}$/, 'batchId hanya boleh huruf, angka, tanda hubung, dan garis bawah (3-64 karakter)').optional(),
   priority: z.enum(['high', 'normal']).optional(),
+  // Mode uji: validasi kontrak + kuota TANPA memasukkan pesan ke antrean.
+  // Dipakai oleh uji otomatis supaya tidak ada pesan nyata yang terkirim
+  // ke WhatsApp (enqueue = kirim; tidak ada undo setelah worker mengambilnya).
+  dryRun: z.boolean().optional(),
+
   // v2
   messages: bulkItemsSchema.optional(),
   // v1 legacy
@@ -1035,6 +1040,21 @@ app.post('/api/v1/messages/send-bulk', { preHandler: requireAuth }, async (req, 
   // batchId dari klien (kampanye dashboard) supaya pause/resume/clear punya sasaran
   // yang stabil; fallback ke perilaku lama bila klien tidak mengirimnya.
   const batchId = data.batchId || `batch_${Date.now().toString(36)}`;
+
+  // Mode uji: kembalikan hasil validasi tanpa menyentuh antrean sama sekali.
+  // Kuota yang sudah terlanjur ditambah dikembalikan penuh.
+  if (data.dryRun) {
+    refundQuota(user.id, items.length);
+    return reply.code(200).send({
+      dryRun: true,
+      batchId,
+      totalValidated: items.length,
+      totalQueued: 0,
+      totalFailed: 0,
+      messages: items.map((item: any) => ({ id: null, to: item.to, status: 'validated', mode: item.mode })),
+      errors: [],
+    });
+  }
 
   const results: Array<{ id: string; to: string; status: string; mode: string }> = [];
   const errors: Array<{ to: string; error: string }> = [];
