@@ -310,7 +310,7 @@ wa-api/
 | `GET` | `/api/v1/sessions` | List status seluruh sesi WhatsApp yang terdaftar | API Key / JWT |
 | `POST` | `/api/v1/sessions` | Buat sesi baru (QR scan atau Pairing Code) | API Key / JWT |
 | `POST` | `/api/v1/messages/send` | Kirim pesan teks (auto-route atau sesi spesifik) | API Key / JWT |
-| `POST` | `/api/v1/messages/media` | Kirim media file (gambar, video, audio, PDF) | API Key / JWT |
+| `POST` | `/api/v1/messages/send-media` | Kirim media file (gambar, video, audio, PDF) | API Key / JWT |
 | `GET` | `/api/v1/messages/status/:id` | Cek status receipt (sent, delivered, read) | API Key / JWT |
 | `GET` | `/api/v1/api-logs` | Lihat histori API logs dengan paginasi & filter | Bearer (Admin) |
 | `DELETE` | `/api/v1/api-logs` | Hapus log terpilih atau bersihkan seluruh histori | Bearer (Admin) |

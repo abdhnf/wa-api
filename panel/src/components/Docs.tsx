@@ -20,7 +20,7 @@ const API_BASE = (import.meta as any).env?.VITE_API_BASE || (
 );
 
 interface EndpointDoc {
- method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+ method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
  path: string;
  desc: string;
  auth: string;
@@ -410,7 +410,50 @@ server {
  curl: `curl -s -X POST ${API_BASE}/auth/rotate-key \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
  response: '{"success": true,"apiKey":"wa_live_new_secret_..."}',
  },
- ],
+
+ {
+  method: 'POST',
+  path: '/auth/blast-launch/regenerate',
+  desc: 'Regenerate atau revoke Blast Access Token. Token lama langsung tidak berlaku.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/auth/blast-launch/regenerate \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"success": true,"token":"blst_new_...","launchUrl":"http://172.30.30.229:8085/auth/launch?token=blst_new_..."}',
+ },
+ {
+  method: 'POST',
+  path: '/auth/register',
+  desc: 'Registrasi akun baru secara mandiri. Bisa dinonaktifkan Administrator lewat /settings.',
+  auth: 'Publik',
+  curl: `curl -s -X POST ${API_BASE}/auth/register \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"name":"Budi","email":"budi@example.com","password":"password123"}' \\\n
+ | jq .`,
+  body: '{\n"name":"Budi",\n"email":"budi@example.com",\n"password":"password123"\n}',
+  response: '{"success": true,"user": {"id":"usr_abc123","name":"Budi","apiKey":"wa_live_..."}}',
+ },
+ {
+  method: 'POST',
+  path: '/auth/google',
+  desc: 'Login atau registrasi otomatis memakai Google OAuth. Domain email dapat dibatasi oleh Administrator.',
+  auth: 'Publik',
+  curl: `curl -s -X POST ${API_BASE}/auth/google \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"credential":"<google-id-token>"}' \\\n
+ | jq .`,
+  body: '{\n"credential":"<google-id-token>"\n}',
+  response: '{"token":"eyJhbGciOi...","user": {"id":"usr_abc123","email":"budi@example.com","role":"user"}}',
+ },
+ {
+  method: 'GET',
+  path: '/auth/config',
+  desc: 'Konfigurasi autentikasi publik: apakah Google OAuth dan pendaftaran mandiri aktif, plus client ID untuk tombol login Google.',
+  auth: 'Publik',
+  curl: `curl -s -X GET ${API_BASE}/auth/config \\\n
+ | jq .`,
+  response: '{"googleAuthEnabled": false,"googleClientId":"","registrationEnabled": true}',
+ }, ],
  },
  {
  id: 'sessions',
@@ -446,10 +489,10 @@ server {
  },
  {
  method: 'POST',
- path: '/sessions/:id/disconnect',
- desc: 'Putuskan koneksi sesi dari WhatsApp.',
+ path: '/sessions/:id/logout',
+ desc: 'Logout sesi dari WhatsApp (putuskan koneksi, kredensial pairing tetap tersimpan).',
  auth: 'JWT atau X-API-Key',
- curl: `curl -s -X POST ${API_BASE}/sessions/sess-mttrskn5/disconnect \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
+ curl: `curl -s -X POST ${API_BASE}/sessions/sess-mttrskn5/logout \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
  response: '{"success": true,"status":"disconnected"}',
  },
  {
@@ -460,7 +503,96 @@ server {
  curl: `curl -s -X DELETE ${API_BASE}/sessions/sess-mttrskn5 \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
  response: '{"success": true,"message":"Sesi berhasil dihapus"}',
  },
- ],
+
+ {
+  method: 'GET',
+  path: '/sessions/:id',
+  desc: 'Detail satu sesi: status koneksi, pemilik, risk score, dan metrik engine.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X GET ${API_BASE}/sessions/sess-mttrskn5 \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"session": {"id":"sess-mttrskn5","name":"Akun Utama","phone":"628xxx","status":"connected","riskScore": 12}}',
+ },
+ {
+  method: 'PATCH',
+  path: '/sessions/:id',
+  desc: 'Rename atau ganti profil sesi tanpa memutus koneksi WhatsApp.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X PATCH ${API_BASE}/sessions/sess-mttrskn5 \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"name":"Nomor CS Baru"}' \\\n
+ | jq .`,
+  body: '{\n"name":"Nomor CS Baru"\n}',
+  response: '{"success": true,"session": {"id":"sess-mttrskn5","name":"Nomor CS Baru"}}',
+ },
+ {
+  method: 'POST',
+  path: '/sessions/:id/reconnect',
+  desc: 'Sambungkan kembali sesi yang logout tanpa perlu scan QR ulang.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/sessions/sess-mttrskn5/reconnect \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"success": true,"status":"connecting"}',
+ },
+ {
+  method: 'POST',
+  path: '/sessions/:id/pair',
+  desc: 'Re-pair sesi: hapus auth lama dan minta QR code baru untuk dipindai.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/sessions/sess-mttrskn5/pair \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"name":"Akun Utama","phone":"6281234567890"}' \\\n
+ | jq .`,
+  body: '{\n"name":"Akun Utama",\n"phone":"6281234567890"\n}',
+  response: '{"success": true,"sessionId":"sess-mttrskn5","qr":"data:image/png;base64,...","session": {"status":"connecting"}}',
+ },
+ {
+  method: 'GET',
+  path: '/sessions/:id/queue/status',
+  desc: 'Status antrean pengiriman sesi: jumlah pesan menunggu, sedang diproses, dan status jeda.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X GET ${API_BASE}/sessions/sess-mttrskn5/queue/status \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"sessionId":"sess-mttrskn5","pending": 4,"sending": 1,"paused": false}',
+ },
+ {
+  method: 'POST',
+  path: '/sessions/:id/queue/pause',
+  desc: 'Jeda antrean pengiriman sesi. Parameter reason bersifat opsional.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/sessions/sess-mttrskn5/queue/pause \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"reason":"Menunggu konfirmasi klien"}' \\\n
+ | jq .`,
+  body: '{\n"reason":"Menunggu konfirmasi klien"\n}',
+  response: '{"success": true,"paused": true,"reason":"Menunggu konfirmasi klien"}',
+ },
+ {
+  method: 'POST',
+  path: '/sessions/:id/queue/resume',
+  desc: 'Lanjutkan kembali antrean pengiriman yang dijeda.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/sessions/sess-mttrskn5/queue/resume \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"success": true,"paused": false}',
+ },
+ {
+  method: 'POST',
+  path: '/sessions/:id/queue/clear',
+  desc: 'Kosongkan antrean pesan yang belum terkirim pada sesi ini.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/sessions/sess-mttrskn5/queue/clear \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"success": true,"cleared": 4}',
+ }, ],
  },
  {
  id: 'antiban',
@@ -477,7 +609,66 @@ server {
  curl: `curl -s ${API_BASE}/sessions/sess-mttrskn5/antiban \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
  response: '{"sessionId":"sess-mttrskn5","antiBan": {"warmup": {"day": 1,"todayLimit": 20,"todaySent": 3},"rateLimiter": {"lastMinute": 0,"lastHour": 3},"timelock": {"isActive": false},"circadianMultiplier": 1.02,"reconnectMultiplier": 1.0,"recovery": {"currentPhase":"normal"}}}',
  },
- ],
+
+ {
+  method: 'PUT',
+  path: '/sessions/:id/antiban',
+  desc: 'Update konfigurasi anti-ban per sesi: pilih preset (strict, balanced, broadcast) atau tuning manual per layer.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X PUT ${API_BASE}/sessions/sess-mttrskn5/antiban \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"preset":"balanced"}' \\\n
+ | jq .`,
+  body: '{\n"preset":"balanced"\n}',
+  response: '{"success": true,"sessionId":"sess-mttrskn5","antiBan": {"preset":"balanced"}}',
+ },
+ {
+  method: 'POST',
+  path: '/sessions/:id/antiban/reset-cooldown',
+  desc: 'Reset cooldown Reply Ratio, opsional untuk satu JID tertentu saja.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/sessions/sess-mttrskn5/antiban/reset-cooldown \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"jid":"6281234567890@s.whatsapp.net"}' \\\n
+ | jq .`,
+  body: '{\n"jid":"6281234567890@s.whatsapp.net"\n}',
+  response: '{"success": true,"sessionId":"sess-mttrskn5","replyRatio": {"cooldownActive": false}}',
+ },
+ {
+  method: 'GET',
+  path: '/sessions/:id/contact-graph/batch/:batchId',
+  desc: 'Status approval Contact Graph Layer 8 untuk satu batch kampanye: jumlah nomor terdaftar dan yang sudah lolos handshake.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X GET ${API_BASE}/sessions/sess-mttrskn5/contact-graph/batch/batch_promo_ramadhan_2026 \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"sessionId":"sess-mttrskn5","batchId":"batch_promo_ramadhan_2026","approved": ["6281234567890@s.whatsapp.net"],"count": 1}',
+ },
+ {
+  method: 'POST',
+  path: '/sessions/:id/contact-graph/batch',
+  desc: 'Daftarkan nomor penerima ke whitelist Contact Graph untuk satu batch kampanye. Nomor otomatis dinormalisasi ke format JID.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/sessions/sess-mttrskn5/contact-graph/batch \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"batchId":"batch_promo_ramadhan_2026","recipients": ["6281234567890","6289876543210"]}' \\\n
+ | jq .`,
+  body: '{\n"batchId":"batch_promo_ramadhan_2026",\n"recipients": ["6281234567890","6289876543210"]\n}',
+  response: '{"success": true,"batchId":"batch_promo_ramadhan_2026","registered": 2}',
+ },
+ {
+  method: 'DELETE',
+  path: '/sessions/:id/contact-graph/batch/:batchId',
+  desc: 'Cabut seluruh whitelist Contact Graph untuk satu batch kampanye.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X DELETE ${API_BASE}/sessions/sess-mttrskn5/contact-graph/batch/batch_promo_ramadhan_2026 \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"success": true,"batchId":"batch_promo_ramadhan_2026","revoked": 2}',
+ }, ],
  },
  {
  id: 'messages',
@@ -513,7 +704,20 @@ server {
  body: '{\n"sessionId":"auto",\n"recipients": ["6281234567890","6289876543210"],\n"text":"Pengumuman sistem terjadwal",\n"priority":"normal"\n}',
  response: '{"success": true,"batchId":"batch_789","queuedCount": 2}',
  },
- ],
+
+ {
+  method: 'POST',
+  path: '/messages/send-location',
+  desc: 'Kirim pesan lokasi (latitude & longitude). Nama dan alamat lokasi bersifat opsional.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/messages/send-location \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"sessionId":"auto","to":"6281234567890","latitude":-6.2088,"longitude":106.8456,"name":"Kantor Pusat"}' \\\n
+ | jq .`,
+  body: '{\n"sessionId":"auto",\n"to":"6281234567890",\n"latitude":-6.2088,\n"longitude":106.8456,\n"name":"Kantor Pusat"\n}',
+  response: '{"success": true,"messageId":"msg_loc789","status":"pending"}',
+ }, ],
  },
  {
  id: 'status',
@@ -524,13 +728,33 @@ server {
  endpoints: [
  {
  method: 'GET',
- path: '/messages/:id/status',
+ path: '/messages/status/:id',
  desc: 'Ambil status pengiriman pesan berdasarkan messageId.',
  auth: 'JWT atau X-API-Key',
- curl: `curl -s ${API_BASE}/messages/msg_abc123/status \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
+ curl: `curl -s ${API_BASE}/messages/status/msg_abc123 \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
  response: '{"messageId":"msg_abc123","status":"read","recipient":"6281234567890","sentAt":"2026-09-10T10:00:00.000Z"}',
  },
- ],
+
+ {
+  method: 'POST',
+  path: '/messages/:id/retry',
+  desc: 'Kirim ulang pesan yang gagal berdasarkan messageId.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/messages/msg_abc123/retry \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"success": true,"message": {"id":"msg_abc123","status":"pending"}}',
+ },
+ {
+  method: 'GET',
+  path: '/messages/status/bulk/:batchId',
+  desc: 'Status seluruh pesan dalam satu batch kampanye sekaligus.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X GET ${API_BASE}/messages/status/bulk/batch_789 \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"batchId":"batch_789","total": 2,"messages": [{"id":"msg_abc123","status":"delivered"}]}',
+ }, ],
  },
  {
  id: 'users',
@@ -556,7 +780,53 @@ server {
  body: '{\n"name":"Client Pro",\n"email":"pro@domain.com",\n"password":"password123",\n"role":"subscription",\n"quotaPerDay": 2000\n}',
  response: '{"success": true,"user": {"id":"usr_xxx","name":"Client Pro","apiKey":"wa_live_..."}}',
  },
- ],
+
+ {
+  method: 'POST',
+  path: '/users/:id/rotate-key',
+  desc: 'Rotasi API key milik pengguna lain (khusus Admin). Kunci lama langsung hangus.',
+  auth: 'JWT (Admin)',
+  curl: `curl -s -X POST ${API_BASE}/users/usr_abc123/rotate-key \\\n
+ -H"Authorization: Bearer ***" \\\n
+ | jq .`,
+  response: '{"success": true,"apiKey":"wa_live_new_secret_..."}',
+ },
+ {
+  method: 'PATCH',
+  path: '/users/:id',
+  desc: 'Update data pengguna: nama, role, kuota harian, atau sesi yang ditugaskan.',
+  auth: 'JWT (Admin)',
+  curl: `curl -s -X PATCH ${API_BASE}/users/usr_abc123 \\\n
+ -H"Authorization: Bearer ***" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"quotaPerDay":5000,"role":"subscription"}' \\\n
+ | jq .`,
+  body: '{\n"quotaPerDay":5000,\n"role":"subscription"\n}',
+  response: '{"success": true,"user": {"id":"usr_abc123","quotaPerDay":5000}}',
+ },
+ {
+  method: 'DELETE',
+  path: '/users/:id',
+  desc: 'Hapus akun pengguna. Akun dengan sesi aktif akan ditolak.',
+  auth: 'JWT (Admin)',
+  curl: `curl -s -X DELETE ${API_BASE}/users/usr_abc123 \\\n
+ -H"Authorization: Bearer ***" \\\n
+ | jq .`,
+  response: '{"success": true,"message":"User berhasil dihapus"}',
+ },
+ {
+  method: 'POST',
+  path: '/users/:id/reset-password',
+  desc: 'Reset password pengguna tanpa perlu password lama. Minimal 6 karakter.',
+  auth: 'JWT (Admin)',
+  curl: `curl -s -X POST ${API_BASE}/users/usr_abc123/reset-password \\\n
+ -H"Authorization: Bearer ***" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"password":"newpassword123"}' \\\n
+ | jq .`,
+  body: '{\n"password":"newpassword123"\n}',
+  response: '{"success": true,"message":"Password berhasil direset"}',
+ }, ],
  },
  {
  id: 'webhooks',
@@ -573,7 +843,20 @@ server {
  curl: `curl -s ${API_BASE}/webhooks \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
  response: '{"webhooks": [{"id":"wh_1","url":"https://my-app.com/wa-webhook","events": ["message.received","message.status"],"status":"active"}]}',
  },
- ],
+
+ {
+  method: 'POST',
+  path: '/webhooks',
+  desc: 'Daftarkan webhook baru untuk menerima notifikasi event. Secret dibuat otomatis bila tidak dikirim.',
+  auth: 'X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/webhooks \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"url":"https://my-app.com/wa-webhook","events": ["message.received","message.status"]}' \\\n
+ | jq .`,
+  body: '{\n"url":"https://my-app.com/wa-webhook",\n"events": ["message.received","message.status"]\n}',
+  response: '{"success": true,"webhookId":"whk_ab12cd34","status":"active"}',
+ }, ],
  },
  {
  id: 'logs',
@@ -633,7 +916,27 @@ server {
  curl: `curl -s ${API_BASE}/health | jq .`,
  response: '{"status":"ok","uptime": 1234.5,"sessions": 1}',
  },
- ],
+
+ {
+  method: 'GET',
+  path: '/metrics',
+  desc: 'Laporan metrik agregat seluruh sesi: throughput, latensi, dan distribusi status pengiriman.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X GET ${API_BASE}/metrics \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"metrics": [{"sessionId":"sess-mttrskn5","sentToday": 15,"failedToday": 0}]}',
+ },
+ {
+  method: 'GET',
+  path: '/sessions/:id/metrics',
+  desc: 'Laporan metrik satu sesi, termasuk status engine anti-ban (warmup, rate limiter, recovery phase).',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X GET ${API_BASE}/sessions/sess-mttrskn5/metrics \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"metrics": {"sessionId":"sess-mttrskn5","sentToday": 15,"warmupDay": 3}}',
+ }, ],
  },
  {
  id: 'blast-auth',
@@ -670,11 +973,199 @@ server {
  },
  ],
  },
+ {
+ id: 'media',
+ label: 'Media & Files',
+ category: 'api',
+ icon: <HardDrive size={15} />,
+ intro: 'Unggah dan kelola berkas media yang dipakai saat mengirim pesan. Berkas yang diunggah menghasilkan ID yang bisa langsung dipakai sebagai mediaUrl pada endpoint kirim pesan.',
+ endpoints: [
+ {
+  method: 'POST',
+  path: '/media/upload',
+  desc: 'Unggah berkas media. Menerima JSON base64 (field data atau base64) maupun binary body dengan header X-File-Name.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/media/upload \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"data":"<base64>","mimeType":"image/jpeg","fileName":"foto.jpg"}' \\\n
+ | jq .`,
+  body: '{\n"data":"<base64>",\n"mimeType":"image/jpeg",\n"fileName":"foto.jpg"\n}',
+  response: '{"success": true,"id":"a1b2c3d4e5f6a7b8c9d0e1f2.jpg","url":"/api/v1/media/a1b2c3d4e5f6a7b8c9d0e1f2.jpg"}',
+ },
+ {
+  method: 'GET',
+  path: '/media/:id',
+  desc: 'Ambil berkas media berdasarkan ID. Endpoint ini publik tanpa autentikasi agar bisa dibaca WhatsApp saat mengunduh media.',
+  auth: 'Publik',
+  curl: `curl -s -X GET ${API_BASE}/media/a1b2c3d4e5f6a7b8c9d0e1f2.jpg \\\n
+ | jq .`,
+  response: '<binary image/jpeg>',
+ },
+ {
+  method: 'DELETE',
+  path: '/media/:id',
+  desc: 'Hapus berkas media dari penyimpanan server.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X DELETE ${API_BASE}/media/a1b2c3d4e5f6a7b8c9d0e1f2.jpg \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"success": true,"message":"Media berhasil dihapus"}',
+ },
+ ],
+},
+ {
+ id: 'queue-batches',
+ label: 'Queue & Batches',
+ category: 'api',
+ icon: <Layers size={15} />,
+ intro: 'Kontrol kampanye massal dan antrean pengiriman. Setiap batch memiliki ID yang dikembalikan oleh endpoint send-bulk dan dapat dijeda, dilanjutkan, atau dibersihkan secara terpisah.',
+ endpoints: [
+ {
+  method: 'GET',
+  path: '/batches/:batchId/status',
+  desc: 'Status satu batch kampanye: apakah sedang dijeda dan berapa pesan yang tersisa.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X GET ${API_BASE}/batches/batch_789/status \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"batchId":"batch_789","paused": false,"pending": 0}',
+ },
+ {
+  method: 'POST',
+  path: '/batches/:batchId/pause',
+  desc: 'Jeda seluruh pengiriman dalam satu batch kampanye. Parameter reason bersifat opsional.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/batches/batch_789/pause \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"reason":"Menunggu approval klien"}' \\\n
+ | jq .`,
+  body: '{\n"reason":"Menunggu approval klien"\n}',
+  response: '{"success": true,"paused": true}',
+ },
+ {
+  method: 'POST',
+  path: '/batches/:batchId/resume',
+  desc: 'Lanjutkan kembali batch kampanye yang dijeda.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/batches/batch_789/resume \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"success": true,"paused": false}',
+ },
+ {
+  method: 'POST',
+  path: '/batches/:batchId/clear',
+  desc: 'Batalkan dan kosongkan sisa antrean dalam satu batch kampanye.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/batches/batch_789/clear \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"success": true,"cleared": 12}',
+ },
+ {
+  method: 'GET',
+  path: '/messages/:sessionId',
+  desc: 'Riwayat pesan dengan paginasi dan filter. Gunakan nilai all atau auto pada sessionId untuk menggabungkan seluruh sesi.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X GET ${API_BASE}/messages/all?limit=50&status=delivered&batchId=batch_789 \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"messages": [{"id":"msg_abc123","to":"6281234567890","status":"delivered"}],"total": 1}',
+ },
+ ],
+},
+ {
+ id: 'settings',
+ label: 'Settings & Auto-Rotate',
+ category: 'api',
+ icon: <Settings size={15} />,
+ intro: 'Konfigurasi tingkat sistem (khusus Admin) dan strategi Auto-Rotate sesi untuk pemerataan beban pengiriman antar nomor.',
+ endpoints: [
+ {
+  method: 'GET',
+  path: '/settings',
+  desc: 'Ambil konfigurasi sistem: status Google OAuth, pendaftaran publik, Turnstile, dan integrasi eksternal. Khusus Admin.',
+  auth: 'JWT (Admin)',
+  curl: `curl -s -X GET ${API_BASE}/settings \\\n
+ -H"Authorization: Bearer ***" \\\n
+ | jq .`,
+  response: '{"settings": {"googleAuthEnabled": false,"registrationEnabled": true,"hasClientSecret": true}}',
+ },
+ {
+  method: 'PATCH',
+  path: '/settings',
+  desc: 'Update konfigurasi sistem. Client secret yang dikirim akan disimpan, nilai kosong diabaikan. Khusus Admin.',
+  auth: 'JWT (Admin)',
+  curl: `curl -s -X PATCH ${API_BASE}/settings \\\n
+ -H"Authorization: Bearer ***" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"registrationEnabled":false}' \\\n
+ | jq .`,
+  body: '{\n"registrationEnabled":false\n}',
+  response: '{"success": true,"message":"Pengaturan berhasil disimpan"}',
+ },
+ {
+  method: 'GET',
+  path: '/autorotate/settings',
+  desc: 'Ambil konfigurasi Auto-Rotate milik akun: status aktif, strategi, dan interval rotasi.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X GET ${API_BASE}/autorotate/settings \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"settings": {"enabled": true,"strategy":"least_loaded"}}',
+ },
+ {
+  method: 'PATCH',
+  path: '/autorotate/settings',
+  desc: 'Update konfigurasi Auto-Rotate akun: aktifkan/nonaktifkan, pilih strategi, dan atur daftar sesi dalam pool.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X PATCH ${API_BASE}/autorotate/settings \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"enabled":true,"strategy":"least_loaded"}' \\\n
+ | jq .`,
+  body: '{\n"enabled":true,\n"strategy":"least_loaded"\n}',
+  response: '{"success": true,"message":"Pengaturan Auto-Rotate akun Anda berhasil diperbarui."}',
+ },
+ {
+  method: 'GET',
+  path: '/autorotate/status',
+  desc: 'Status Auto-Rotate per sesi: mana yang masuk pool, beban terakhir, dan kapan terakhir dipakai.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s -X GET ${API_BASE}/autorotate/status \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ | jq .`,
+  response: '{"sessions": [{"id":"sess-mttrskn5","name":"Akun Utama","status":"connected","inPool": true}]}',
+ },
+ ],
+},
+ {
+ id: 'admin',
+ label: 'Admin & Audit',
+ category: 'api',
+ icon: <ShieldAlert size={15} />,
+ intro: 'Endpoint khusus Administrator untuk audit aktivitas pengguna. Membutuhkan role admin pada token yang dipakai.',
+ endpoints: [
+ {
+  method: 'GET',
+  path: '/admin/users/:id/logs',
+  desc: 'Audit log dan aktivitas satu pengguna: riwayat request, error, dan perubahan data. Khusus Super Admin / Admin.',
+  auth: 'JWT (Admin)',
+  curl: `curl -s -X GET ${API_BASE}/admin/users/usr_abc123/logs \\\n
+ -H"Authorization: Bearer ***" \\\n
+ | jq .`,
+  response: '{"logs": [{"id":"log_123","method":"POST","endpoint":"/messages/send","statusCode": 202}]}',
+ },
+ ],
+},
 ];
 
 const methodColor: Record<string, string> = {
  GET: 'bg-pine-soft/10 text-pine border-pine/30',
  POST: 'bg-sky-500/10 text-sky-400 border-sky-500/30',
+ PUT: 'bg-violet-500/10 text-violet-400 border-violet-500/30',
  PATCH: 'bg-honey/10 text-honey border-honey-line/30',
  DELETE: 'bg-clay/10 text-clay border-clay-line/30',
 };

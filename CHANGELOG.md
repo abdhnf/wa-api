@@ -6,7 +6,18 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
-## [Unreleased] — branch `main`
+## [Unreleased]
+
+### Docs
+- **API Reference lengkap**: `panel/src/components/Docs.tsx` kini mendokumentasikan **65/65 endpoint** (sebelumnya 24 entri, 22 cocok). Ditambahkan 43 endpoint yang belum terdokumentasi, termasuk Contact Graph whitelist (Layer 8), Queue & Batches, Media & Files, Auto-Rotate, dan Admin audit.
+- **Perbaikan path salah** (terverifikasi terhadap `server.ts`):
+  - `POST /sessions/:id/disconnect` -> `POST /sessions/:id/logout` (route `disconnect` tidak pernah ada).
+  - `GET /messages/:id/status` -> `GET /messages/status/:id` (urutan segmen terbalik).
+  - `README.md`: `/api/v1/messages/media` -> `/api/v1/messages/send-media`.
+- **4 section baru** di UI Docs: Media & Files, Queue & Batches, Settings & Auto-Rotate, Admin & Audit.
+- Tipe `method` dan peta warna diperluas agar `PUT` terdukung (dipakai `/sessions/:id/antiban`).
+
+ — branch `main`
 
 **Tema:** refactor UI/UX Contact Graph Whitelist ke Dedicated Modal & responsif Delivery Queue mobile.
 
