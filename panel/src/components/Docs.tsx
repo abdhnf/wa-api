@@ -698,11 +698,11 @@ server {
  {
  method: 'POST',
  path: '/messages/send-bulk',
- desc: 'Kirim pesan ke banyak penerima sekaligus (maks 500 nomor per batch). Otomatis diproses antrean.',
+  desc: 'Kirim ke banyak penerima sekaligus (maks 500 per request). Tiap penerima boleh punya isi sendiri: teks, media, atau lokasi. batchId opsional dari klien supaya pause/resume/clear punya sasaran stabil; dryRun=true memvalidasi tanpa memasukkan ke antrean. Bentuk lama recipients[] + text tetap didukung.',
  auth: 'JWT atau X-API-Key',
- curl: `curl -s -X POST ${API_BASE}/messages/send-bulk \\\n -H"X-API-Key: ${getUserApiKey()}" \\\n -H"Content-Type: application/json" \\\n -d '{"sessionId":"auto","recipients": ["6281234567890","6289876543210"],"text":"Broadcast promo"}' | jq .`,
- body: '{\n"sessionId":"auto",\n"recipients": ["6281234567890","6289876543210"],\n"text":"Pengumuman sistem terjadwal",\n"priority":"normal"\n}',
- response: '{"success": true,"batchId":"batch_789","queuedCount": 2}',
+ curl: `curl -s -X POST ${API_BASE}/messages/send-bulk \\\n -H"X-API-Key: ${getUserApiKey()}" \\\n -H"Content-Type: application/json" \\\n -d '{"sessionId":"auto","batchId":"camp_12","messages":[{"mode":"text","to":"6281234567890","text":"Halo Budi, promo khusus"},{"mode":"location","to":"6289876543210","latitude":-6.2,"longitude":106.8}]}' | jq .`,
+ body: '{\n"sessionId":"auto",\n"batchId":"camp_12",\n"priority":"normal",\n"messages":[\n  {"mode":"text","to":"6281234567890","text":"Halo Budi, promo khusus"},\n  {"mode":"media","to":"6289876543210","mediaType":"image","mediaUrl":"https://example.com/foto.jpg","caption":"Untuk Siti"},\n  {"mode":"location","to":"628111222333","latitude":-6.2088,"longitude":106.8456,"name":"Kantor"}\n]\n}',
+ response: '{"batchId":"camp_12","totalQueued":2,"totalFailed":1,"messages":[{"id":"msg_a1b2c3","to":"6281234567890","status":"queued"}],"errors":[{"to":"628111222333","error":"Sesi WhatsApp belum terhubung"}]}',
  },
 
  {
@@ -1019,7 +1019,7 @@ server {
  label: 'Queue & Batches',
  category: 'api',
  icon: <Layers size={15} />,
- intro: 'Kontrol kampanye massal dan antrean pengiriman. Setiap batch memiliki ID yang dikembalikan oleh endpoint send-bulk dan dapat dijeda, dilanjutkan, atau dibersihkan secara terpisah.',
+  intro: 'Kontrol kampanye massal dan antrean pengiriman. batchId berasal dari klien (mis. camp_12) atau dari respons send-bulk. Hanya batch milik sendiri yang boleh dikontrol; batch milik user lain dibalas 403.',
  endpoints: [
  {
   method: 'GET',
@@ -1029,7 +1029,7 @@ server {
   curl: `curl -s -X GET ${API_BASE}/batches/batch_789/status \\\n
  -H"X-API-Key: ${getUserApiKey()}" \\\n
  | jq .`,
-  response: '{"batchId":"batch_789","paused": false,"pending": 0}',
+  response: '{"isPaused": false, "reason": null, "activeCount": 0}',
  },
  {
   method: 'POST',
