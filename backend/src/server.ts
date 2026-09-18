@@ -16,7 +16,7 @@ import {
   setUserBlastPin, createBlastLaunchToken, verifyAndBurnBlastLaunchToken,
   getOrCreateUserBlastAccessToken, rotateUserBlastAccessToken, getUserByBlastAccessToken,
   getMessageById, db,
-  getSetting, getAllSettings, setSettings, getAllUserSettings, setUserSettings, upsertGoogleUser, checkAndIncrementWeeklyQuota, getUserLogs, insertApiLog, listApiLogs, deleteApiLogs, clearApiLogs,
+  getSetting, getAllSettings, setSettings, getAllUserSettings, setUserSettings, upsertGoogleUser, checkAndIncrementWeeklyQuota, checkAndIncrementQuota, refundQuota, getUserLogs, insertApiLog, listApiLogs, deleteApiLogs, clearApiLogs,
 } from './db.js';
 import { EMPTY_SESSIONS } from './seed-sessions.js';
 
@@ -106,11 +106,65 @@ const sendLocationSchema = z.object({
   batchId: z.string().optional(),
 });
 
+// Nomor tujuan format internasional tanpa simbol (628xxx)
+const phoneDigits = z.string().regex(/^\d+$/, 'Nomor harus numerik (format 628xxx)');
+
+// Satu item pesan pada pengiriman bulk. `mode` menentukan bentuk payload yang wajib.
+// Catatan: zod v3 tidak mengizinkan `.refine()` di dalam discriminatedUnion, sehingga
+// validasi "butuh mediaUrl atau mediaBase64" dilakukan di superRefine pada array-nya.
+const bulkItemSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('text'),
+    to: phoneDigits,
+    text: z.string().min(1),
+  }),
+  z.object({
+    mode: z.literal('media'),
+    to: phoneDigits,
+    mediaType: z.enum(['image', 'document', 'audio', 'video']),
+    mediaUrl: z.string().url().optional(),
+    mediaBase64: z.string().optional(),
+    mediaMimeType: z.string().optional(),
+    fileName: z.string().optional(),
+    caption: z.string().optional(),
+  }),
+  z.object({
+    mode: z.literal('location'),
+    to: phoneDigits,
+    latitude: z.number().min(-90).max(90),
+    longitude: z.number().min(-180).max(180),
+    name: z.string().optional(),
+    address: z.string().optional(),
+  }),
+]);
+
+const bulkItemsSchema = z.array(bulkItemSchema).min(1).max(500).superRefine((items, ctx) => {
+  items.forEach((item, i) => {
+    if (item.mode === 'media' && !item.mediaUrl && !item.mediaBase64) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [i], message: 'Butuh mediaUrl atau mediaBase64' });
+    }
+  });
+});
+
+/**
+ * Bulk v2 menerima `messages[]` berisi payload lengkap per penerima, sehingga
+ * personalisasi (variabel kustom, spintax) dan pesan media/lokasi tetap utuh.
+ * `batchId` boleh dipasok klien agar dashboard bisa mengendalikan kampanye
+ * (pause / resume / clear) memakai ID yang stabil.
+ *
+ * Bentuk v1 (`recipients[]` + `text`) tetap diterima untuk kompatibilitas panel.
+ */
 const sendBulkSchema = z.object({
   sessionId: z.string().min(1),
-  recipients: z.array(z.string().regex(/^\d+$/)).min(1).max(500),
-  text: z.string().min(1),
+  batchId: z.string().regex(/^[A-Za-z0-9_-]{3,64}$/, 'batchId hanya boleh huruf, angka, tanda hubung, dan garis bawah (3-64 karakter)').optional(),
   priority: z.enum(['high', 'normal']).optional(),
+  // v2
+  messages: bulkItemsSchema.optional(),
+  // v1 legacy
+  recipients: z.array(phoneDigits).min(1).max(500).optional(),
+  text: z.string().min(1).optional(),
+}).refine((d) => Boolean(d.messages) || Boolean(d.recipients && d.text), {
+  message: 'Butuh messages[] (v2) atau recipients[] + text (v1)',
 });
 
 const loginSchema = z.object({
@@ -825,13 +879,38 @@ app.post('/api/v1/sessions/:id/queue/clear', { preHandler: requireAuth }, async 
 });
 
 // ============ Batch Queue Controls (Jeda, Lanjut, dan Batalkan Per Kampanye/Batch) ============
+/**
+ * Cek kepemilikan batch untuk kontrol kampanye.
+ *
+ * `batchId` dipilih klien dan berpola mudah ditebak, sedangkan endpoint
+ * pause/resume/clear sebelumnya hanya memakai requireAuth. Tanpa cek ini,
+ * user mana pun bisa menghentikan kampanye milik user lain (IDOR).
+ *
+ * Batch tanpa baris pesan (mis. sudah dibersihkan) tidak dapat diverifikasi
+ * kepemilikannya; batch seperti itu diperlakukan sebagai boleh diakses agar
+ * operasi bersih-bersih tetap idempoten. Operasi tersebut tidak merusak data
+ * karena tidak ada pesan yang tersisa untuk dibatalkan.
+ */
+function userOwnsBatch(userId: string, role: string, batchId: string): boolean {
+  if (role === 'admin') return true;
+  const row = db.prepare('SELECT user_id FROM messages WHERE batch_id = ? LIMIT 1').get(batchId) as { user_id?: string } | undefined;
+  if (!row) return true;
+  return !row.user_id || row.user_id === userId;
+}
+
 app.get('/api/v1/batches/:batchId/status', { preHandler: requireAuth }, async (req, reply) => {
   const { batchId } = req.params as { batchId: string };
+  if (!userOwnsBatch(req.apiKeyUser!.id, req.apiKeyUser!.role, batchId)) {
+    return reply.code(403).send({ error: 'Akses ditolak: batch ini bukan milik Anda' });
+  }
   return reply.send(manager.isBatchPaused(batchId));
 });
 
 app.post('/api/v1/batches/:batchId/pause', { preHandler: requireAuth }, async (req, reply) => {
   const { batchId } = req.params as { batchId: string };
+  if (!userOwnsBatch(req.apiKeyUser!.id, req.apiKeyUser!.role, batchId)) {
+    return reply.code(403).send({ error: 'Akses ditolak: batch ini bukan milik Anda' });
+  }
   const body = (req.body || {}) as { reason?: string };
   const res = manager.pauseBatch(batchId, body.reason || 'Kampanye dijeda oleh pengguna');
   return reply.send(res);
@@ -839,12 +918,18 @@ app.post('/api/v1/batches/:batchId/pause', { preHandler: requireAuth }, async (r
 
 app.post('/api/v1/batches/:batchId/resume', { preHandler: requireAuth }, async (req, reply) => {
   const { batchId } = req.params as { batchId: string };
+  if (!userOwnsBatch(req.apiKeyUser!.id, req.apiKeyUser!.role, batchId)) {
+    return reply.code(403).send({ error: 'Akses ditolak: batch ini bukan milik Anda' });
+  }
   const res = manager.resumeBatch(batchId);
   return reply.send(res);
 });
 
 app.post('/api/v1/batches/:batchId/clear', { preHandler: requireAuth }, async (req, reply) => {
   const { batchId } = req.params as { batchId: string };
+  if (!userOwnsBatch(req.apiKeyUser!.id, req.apiKeyUser!.role, batchId)) {
+    return reply.code(403).send({ error: 'Akses ditolak: batch ini bukan milik Anda' });
+  }
   const body = (req.body || {}) as { reason?: string };
   const res = manager.clearBatch(batchId, body.reason || 'Kampanye dibatalkan oleh pengguna');
   return reply.send(res);
@@ -934,32 +1019,76 @@ app.post('/api/v1/messages/send-bulk', { preHandler: requireAuth }, async (req, 
   const { data } = parsed;
 
   const user = req.apiKeyUser!;
-  const quota = checkAndIncrementWeeklyQuota(user.id);
+
+  // Normalisasi v1 -> v2 supaya jalur eksekusi hanya satu.
+  const items = data.messages
+    ? data.messages
+    : (data.recipients || []).map((to: string) => ({ mode: 'text' as const, to, text: data.text! }));
+
+  // Kuota dihitung per pesan, bukan per request: kampanye 500 nomor tidak boleh
+  // hanya terhitung 1 pesan kuota.
+  const quota = checkAndIncrementQuota(user.id, items.length);
   if (!quota.allowed) {
     return reply.code(429).send({ error: quota.reason, quota: quota.limit, used: quota.used, resetAt: quota.resetAt });
   }
 
-  const batchId = `batch_${Date.now().toString(36)}`;
-  const msgs = await Promise.all(
-    data.recipients.map(async (to: string) => {
-      let resolved;
-      try {
-        resolved = await manager.resolveSession(data.sessionId, to, user.id, user.role);
-      } catch (err: any) {
-        throw new Error(err.message || 'Gagal memproses sesi WhatsApp');
-      }
-      return manager.enqueue({ sessionId: resolved.sessionId, userId: user.id, mode: 'text', to, text: data.text, batchId, priority: data.priority });
-    })
-  ).catch((err: any) => {
-    return reply.code(400).send({ error: err.message });
-  });
-  if (reply.sent) return;
+  // batchId dari klien (kampanye dashboard) supaya pause/resume/clear punya sasaran
+  // yang stabil; fallback ke perilaku lama bila klien tidak mengirimnya.
+  const batchId = data.batchId || `batch_${Date.now().toString(36)}`;
+
+  const results: Array<{ id: string; to: string; status: string; mode: string }> = [];
+  const errors: Array<{ to: string; error: string }> = [];
+
+  for (const item of items) {
+    try {
+      const resolved = await manager.resolveSession(data.sessionId, item.to, user.id, user.role);
+      const msg = await manager.enqueue({
+        sessionId: resolved.sessionId,
+        userId: user.id,
+        mode: item.mode,
+        to: item.to,
+        batchId,
+        priority: data.priority,
+        ...(item.mode === 'text'
+          ? { text: item.text }
+          : item.mode === 'media'
+            ? {
+                mediaType: item.mediaType,
+                mediaUrl: item.mediaUrl,
+                mediaBase64: item.mediaBase64,
+                mediaMimeType: item.mediaMimeType,
+                fileName: item.fileName,
+                caption: item.caption,
+              }
+            : {
+                latitude: item.latitude,
+                longitude: item.longitude,
+                name: item.name,
+                address: item.address,
+              }),
+      });
+      results.push({ id: msg.id, to: msg.to, status: msg.status, mode: item.mode });
+    } catch (err: any) {
+      // Kegagalan satu penerima tidak boleh menggagalkan seluruh batch.
+      errors.push({ to: item.to, error: err?.message || 'Gagal memproses sesi WhatsApp' });
+    }
+  }
+
+  // Kuota hanya boleh mencerminkan pesan yang benar-benar masuk antrean.
+  if (errors.length > 0) refundQuota(user.id, errors.length);
+
+  if (results.length === 0) {
+    return reply.code(400).send({ error: 'Tidak ada pesan yang berhasil masuk antrean.', errors });
+  }
+
   return reply.code(202).send({
     success: true,
     batchId,
-    totalQueued: data.recipients.length,
+    totalQueued: results.length,
+    totalFailed: errors.length,
     strategy: 'gaussian_jitter_pacing',
-    messages: msgs.map((m: { id: string; to: string; status: string }) => ({ id: m.id, to: m.to, status: m.status })),
+    messages: results,
+    errors,
   });
 });
 

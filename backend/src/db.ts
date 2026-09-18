@@ -362,8 +362,19 @@ function mapUser(row: any): UserRecord {
 }
 
 
-/** Validasi & increment kuota dinamis (harian / mingguan / bulanan; default 100/minggu untuk user biasa; admin unlimited) */
-export function checkAndIncrementWeeklyQuota(userId: string): { allowed: boolean; used: number; limit: number; resetAt?: string; reason?: string } {
+/**
+ * Validasi & increment kuota dinamis (harian / mingguan / bulanan; default 100/minggu
+ * untuk user biasa; admin unlimited).
+ *
+ * `count` = jumlah pesan yang akan dikirim dalam satu operasi. Endpoint bulk harus
+ * memakai `count > 1`, karena memanggil fungsi ini sekali per request membuat
+ * kampanye 500 nomor hanya terhitung 1 pesan kuota.
+ *
+ * Kuota di-increment HANYA setelah lolos validasi, sehingga request yang ditolak
+ * tidak mengurangi kuota.
+ */
+export function checkAndIncrementQuota(userId: string, count = 1): { allowed: boolean; used: number; limit: number; resetAt?: string; reason?: string } {
+  const amount = Math.max(1, Math.floor(count));
   const user = getUserById(userId);
   if (!user) return { allowed: false, used: 0, limit: 0, reason: 'User tidak ditemukan' };
 
@@ -393,20 +404,43 @@ export function checkAndIncrementWeeklyQuota(userId: string): { allowed: boolean
     resetAt = nextReset;
   }
 
-  // Cek apakah mencapai batas kuota
-  if (currentUsed >= quotaLimit) {
+  // Tolak sebelum ada side effect bila sisa kuota tidak cukup untuk seluruh operasi
+  if (currentUsed + amount > quotaLimit) {
+    const remaining = Math.max(0, quotaLimit - currentUsed);
+    const reason = amount === 1
+      ? `Batas kuota ${periodLabel} (${quotaLimit} pesan/${periodUnit}) tercapai. Reset pada ${resetAt.toLocaleDateString('id-ID')}.`
+      : `Kuota ${periodLabel} tidak cukup: butuh ${amount} pesan, sisa ${remaining} dari ${quotaLimit}. Reset pada ${resetAt.toLocaleDateString('id-ID')}.`;
     return {
       allowed: false,
       used: currentUsed,
       limit: quotaLimit,
       resetAt: resetAt.toISOString(),
-      reason: `Batas kuota ${periodLabel} (${quotaLimit} pesan/${periodUnit}) tercapai. Reset pada ${resetAt.toLocaleDateString('id-ID')}.`,
+      reason,
     };
   }
 
   // Increment penggunaan
-  db.prepare('UPDATE users SET used_in_period = used_in_period + 1, used_this_week = used_this_week + 1, used_today = used_today + 1 WHERE id = ?').run(userId);
-  return { allowed: true, used: currentUsed + 1, limit: quotaLimit, resetAt: resetAt.toISOString() };
+  db.prepare('UPDATE users SET used_in_period = used_in_period + ?, used_this_week = used_this_week + ?, used_today = used_today + ? WHERE id = ?')
+    .run(amount, amount, amount, userId);
+  return { allowed: true, used: currentUsed + amount, limit: quotaLimit, resetAt: resetAt.toISOString() };
+}
+
+/** Pembungkus kompatibilitas: satu pesan per pemanggilan. */
+export function checkAndIncrementWeeklyQuota(userId: string): { allowed: boolean; used: number; limit: number; resetAt?: string; reason?: string } {
+  return checkAndIncrementQuota(userId, 1);
+}
+
+/**
+ * Kembalikan kuota yang sudah di-increment tetapi pesannya gagal masuk antrean.
+ * Dipakai endpoint bulk saat sebagian item gagal, supaya kuota hanya mencerminkan
+ * pesan yang benar-benar diserahkan ke gateway.
+ */
+export function refundQuota(userId: string, count: number): void {
+  const amount = Math.max(0, Math.floor(count));
+  if (amount === 0) return;
+  db.prepare(
+    'UPDATE users SET used_in_period = MAX(0, used_in_period - ?), used_this_week = MAX(0, used_this_week - ?), used_today = MAX(0, used_today - ?) WHERE id = ?'
+  ).run(amount, amount, amount, userId);
 }
 
 export function incrementUsage(userId: string): void {
