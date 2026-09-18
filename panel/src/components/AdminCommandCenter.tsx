@@ -4,6 +4,7 @@ import {
   XCircle, Search, Filter, ChevronLeft, ChevronRight, Loader2,
   Users, Smartphone, Layers, AlertCircle, Trash2, CheckCheck
 } from 'lucide-react';
+import { MessageStatusBadge } from '../lib/messageStatus';
 import { type Session, type QueueItem } from '../dummyData';
 import {
   apiGetSessionMessages,
@@ -131,53 +132,11 @@ export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({ sessions
 
   const totalPages = Math.ceil(totalCount / limit) || 1;
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'sent':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20">
-            <CheckCircle2 size={11} /> Sent
-          </span>
-        );
-      case 'delivered':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-            <CheckCheck size={11} /> Delivered
-          </span>
-        );
-      case 'read':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
-            <CheckCheck size={11} /> Read
-          </span>
-        );
-      case 'pacing':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-            <Clock size={11} className="animate-spin" /> Pacing
-          </span>
-        );
-      case 'pending':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-surface-alt text-ink-muted border border-line">
-            <Clock size={11} /> Antrean
-          </span>
-        );
-      case 'cancelled':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-500/20">
-            <XCircle size={11} /> Dibatalkan
-          </span>
-        );
-      case 'failed':
-      default:
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
-            <AlertCircle size={11} /> Gagal
-          </span>
-        );
-    }
-  };
+  // Badge status memakai sumber bersama; sebelumnya `default` melabeli
+  // setiap status tak dikenal sebagai "Gagal".
+  const getStatusBadge = (status: string) => (
+    <MessageStatusBadge status={status} iconSize={11} compact />
+  );
 
   return (
     <div className="space-y-5">

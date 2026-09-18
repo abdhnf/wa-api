@@ -7,6 +7,7 @@ import {
   Search
 } from 'lucide-react';
 import { type QueueItem, type Session, EMPTY_SESSIONS, EMPTY_QUEUE } from '../dummyData';
+import { MessageStatusBadge } from '../lib/messageStatus';
 import { apiGetSessions, apiGetSessionMessages, apiSendBulk, apiGetAntiBan, apiUpdateAntiBan, apiResetReplyRatioCooldown, apiRetryMessage, apiGetQueueStatus, apiPauseQueue, apiResumeQueue, apiUpdateSessionProfile, apiGetBatchApproval, apiApproveBatchRecipients, apiRevokeBatchApproval } from '../api';
 import { Toast } from './Toast';
 import { AutoRotateSettings } from './AutoRotateSettings';
@@ -400,76 +401,10 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  }
  };
 
- const getStatusBadge = (status: QueueItem['status']) => {
-   switch (status) {
-     case 'delivered':
-       return (
-         <span className="inline-flex items-center gap-1 text-[11px] text-pine bg-pine-wash/60 px-2 py-0.5 rounded border border-pine-line/50">
-           <CheckCircle2 size={12} /> Sampai
-         </span>
-       );
-     case 'sending':
-       return (
-         <span className="inline-flex items-center gap-1 text-[11px] text-sea bg-sea-wash/60 px-2 py-0.5 rounded border border-sea-line/50 animate-pulse">
-           <Zap size={12} /> Sedang Dikirim
-         </span>
-       );
-     case 'pacing':
-       return (
-         <span className="inline-flex items-center gap-1 text-[11px] text-honey bg-honey-wash/60 px-2 py-0.5 rounded border border-honey-line/50">
-           <Clock size={12} /> Jeda Anti-Ban
-         </span>
-       );
-     case 'pending':
-       return (
-         <span className="inline-flex items-center gap-1 text-[11px] text-honey bg-honey-wash/60 px-2 py-0.5 rounded border border-honey-line/50">
-           <Clock size={12} /> Antrean Gateway
-         </span>
-       );
-     case 'cancelled':
-       return (
-         <span className="inline-flex items-center gap-1 text-[11px] text-ink-muted bg-surface-sunken px-2 py-0.5 rounded border border-line">
-           <XCircle size={12} /> Dibatalkan
-         </span>
-       );
-     case 'failed':
-       return (
-         <span className="inline-flex items-center gap-1 text-[11px] text-clay bg-clay-wash/60 px-2 py-0.5 rounded border border-clay-line/50">
-           <AlertTriangle size={12} /> Gagal
-         </span>
-       );
-     case 'sent':
-       return (
-         <span className="inline-flex items-center gap-1 text-[11px] text-sea bg-sea-wash/60 px-2 py-0.5 rounded border border-sea-line/50">
-           <Send size={12} /> Terkirim
-         </span>
-       );
-     case 'read':
-       return (
-         <span className="inline-flex items-center gap-1 text-[11px] text-sea bg-sea-wash/60 px-2 py-0.5 rounded border border-sea-line/50">
-           <CheckCheck size={12} /> Dibaca
-         </span>
-       );
-     case 'invalid_number':
-       return (
-         <span className="inline-flex items-center gap-1 text-[11px] text-honey bg-honey-wash/60 px-2 py-0.5 rounded border border-honey-line/50">
-           <AlertTriangle size={12} /> Nomor Invalid
-         </span>
-       );
-     case 'not_registered':
-       return (
-         <span className="inline-flex items-center gap-1 text-[11px] text-clay bg-clay-wash/60 px-2 py-0.5 rounded border border-clay-line/50">
-           <AlertTriangle size={12} /> Tidak Terdaftar
-         </span>
-       );
-     default:
-       return (
-         <span className="inline-flex items-center gap-1 text-[11px] text-ink-muted bg-surface-sunken px-2 py-0.5 rounded border border-line">
-           {status}
-         </span>
-       );
-   }
- };
+  // Badge status memakai sumber bersama agar konsisten dengan Command Center.
+  const getStatusBadge = (status: QueueItem['status']) => (
+    <MessageStatusBadge status={status} iconSize={12} />
+  );
 
  const getModeIcon = (mode: string) => {
  switch (mode) {
