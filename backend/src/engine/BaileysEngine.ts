@@ -4,6 +4,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
+  jidNormalizedUser,
   type WASocket,
   type AnyMessageContent,
 } from '@whiskeysockets/baileys';
@@ -330,7 +331,8 @@ export class BaileysEngine {
   }
 
   private normalizePhone(id: string): string {
-    return id.replace(/[^0-9]/g, '').replace(/^0/, '62');
+    const cleanId = jidNormalizedUser(id).split('@')[0] || id.split('@')[0].split(':')[0];
+    return cleanId.replace(/[^0-9]/g, '').replace(/^0/, '62');
   }
 
   private isReady(s: ActiveSession): boolean {
