@@ -71,6 +71,15 @@ export interface QueueSessionStatus {
   vipPendingCount?: number; // Deprecated alias untuk backward compatibility
   /** Sisa waktu (ms) sampai antrean dijeda otomatis dibuka kembali. null = tidak ada jadwal. */
   autoResumeInMs?: number | null;
+  /**
+   * Jumlah pesan per status untuk SELURUH riwayat sesi ini, bukan hanya
+   * halaman yang sedang tampil di panel. Dipakai kartu statistik supaya
+   * angkanya tidak berubah saat operator pindah halaman atau mengubah
+   * jumlah baris per halaman.
+   */
+  byStatus?: Record<string, number>;
+  /** Total seluruh pesan sesi ini, termasuk status yang tidak dikenal panel. */
+  totalMessages?: number;
 }
 
 export interface UserRecord {

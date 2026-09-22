@@ -46,6 +46,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS lid_mappings (
+  lid TEXT PRIMARY KEY,
+  pn TEXT NOT NULL,
+  phone TEXT,
+  learned_at INTEGER NOT NULL,
+  seen_count INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_lid_mappings_pn ON lid_mappings(pn);
+
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,
@@ -125,6 +134,7 @@ ensureColumn('users', 'quota_limit', 'INTEGER NOT NULL DEFAULT 100');
 ensureColumn('users', 'used_in_period', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('users', 'quota_period', "TEXT NOT NULL DEFAULT 'weekly'");
 ensureColumn('messages', 'priority', "TEXT DEFAULT 'normal'");
+ensureColumn('sessions', 'health_state', 'TEXT');
 ensureColumn('users', 'blast_pin_hash', 'TEXT');
 ensureColumn('users', 'blast_access_token', 'TEXT');
 
@@ -547,9 +557,46 @@ export function insertMessage(m: OutboundMessage, defaultUserId = 'usr_c26f74d6'
   ).run(m.id, m.sessionId, uid, m.mode, m.to, JSON.stringify(m), m.status, m.jitterDelayMs, m.batchId ?? null, m.timestamp, priority);
 }
 
+/**
+ * Urutan kemajuan status pesan. Status TIDAK BOLEH mundur kecuali ke 'failed'.
+ *
+ * Kenapa ini perlu: event `messages.update` dan `message-receipt.update` datang
+ * tidak berurutan, apalagi setelah socket reconnect. Tanpa proteksi ini, satu
+ * event SERVER_ACK (status 2) yang datang terlambat akan menurunkan pesan yang
+ * sudah 'read' kembali ke 'sent' — dan operator melihat pesan yang sebenarnya
+ * sudah dibaca sebagai belum terkirim.
+ *
+ * Status terminal (failed / invalid_number / not_registered / cancelled) tidak
+ * ada di sini karena bukan bagian dari rantai kemajuan normal.
+ */
+const STATUS_RANK: Record<string, number> = {
+  pending: 0,
+  queued: 0,
+  pacing: 1,
+  sending: 2,
+  sent: 3,
+  delivered: 4,
+  read: 5,
+};
+
+/** Status yang selalu boleh ditulis, apa pun status sebelumnya. */
+const FORCED_STATUSES = new Set(['failed', 'invalid_number', 'not_registered', 'cancelled']);
+
 export function updateMessageStatus(id: string, status: OutboundMessage['status'], errorDetail?: string, jitterDelayMs?: number): void {
-  const row = db.prepare('SELECT payload, jitter_delay_ms FROM messages WHERE id = ?').get(id) as any;
+  const row = db.prepare('SELECT status, payload, jitter_delay_ms FROM messages WHERE id = ?').get(id) as any;
   if (row) {
+    // Tolak kemunduran status. 'failed' dan status terminal lain selalu lolos
+    // supaya kegagalan tetap tercatat walau pesan sudah pernah 'read'.
+    const currentRank = STATUS_RANK[row.status];
+    const nextRank = STATUS_RANK[status];
+    if (
+      !FORCED_STATUSES.has(status) &&
+      currentRank !== undefined &&
+      nextRank !== undefined &&
+      nextRank < currentRank
+    ) {
+      return;
+    }
     try {
       const obj = JSON.parse(row.payload);
       obj.status = status;
@@ -656,6 +703,37 @@ export function listMessagesPaged(options: ListMessagesOptions): { messages: Out
   return { messages: rows.map(mapMessageRow), total };
 }
 
+/**
+ * Jumlah pesan per status untuk satu sesi — SELURUH riwayat, bukan halaman aktif.
+ *
+ * Panel sebelumnya menghitung kartu statistik dari array baris yang sedang
+ * tampil (`limit`/`offset`), sehingga "Masih Antrean / Delivery Sukses /
+ * Pesan Gagal" berubah-ubah mengikuti halaman dan jumlah baris per halaman.
+ * Agregasi ini dihitung di SQL supaya angkanya tetap benar walau riwayatnya
+ * puluhan ribu pesan.
+ *
+ * Status yang tidak dikenal tetap dikembalikan apa adanya lewat `byStatus`,
+ * sementara `total` adalah jumlah seluruh baris termasuk status tak dikenal
+ * (sebelumnya baris `cancelled` hilang dari semua kartu).
+ */
+export function countMessagesByStatus(sessionId: string): {
+  byStatus: Record<string, number>;
+  total: number;
+} {
+  const rows = db
+    .prepare('SELECT status, COUNT(*) as c FROM messages WHERE session_id = ? GROUP BY status')
+    .all(sessionId) as any[];
+
+  const byStatus: Record<string, number> = {};
+  let total = 0;
+  for (const r of rows) {
+    const n = Number(r.c) || 0;
+    byStatus[String(r.status)] = n;
+    total += n;
+  }
+  return { byStatus, total };
+}
+
 function queryMessages(options: ListMessagesOptions): { rows: any[]; total: number } {
   const where: string[] = [];
   const params: any[] = [];
@@ -759,6 +837,81 @@ export function saveAntiBanState(sessionId: string, state: string): void {
   db.prepare('UPDATE sessions SET antiban_state = ? WHERE id = ?').run(state, sessionId);
 }
 
+// ============ LID Resolver persistence ============
+
+export type LidMappingRow = {
+  lid: string;
+  pn: string;
+  phone: string | null;
+  learned_at: number;
+  seen_count: number;
+};
+
+/** Ambil seluruh mapping LID <-> PN untuk hydrate resolver saat boot. */
+export function listLidMappings(): LidMappingRow[] {
+  try {
+    return db.prepare('SELECT lid, pn, phone, learned_at, seen_count FROM lid_mappings').all() as LidMappingRow[];
+  } catch (e) {
+    console.warn('[db] Gagal membaca lid_mappings:', e);
+    return [];
+  }
+}
+
+/** Simpan/perbarui batch mapping LID <-> PN. */
+export function upsertLidMappings(rows: LidMappingRow[]): void {
+  if (rows.length === 0) return;
+  try {
+    const stmt = db.prepare(
+      `INSERT INTO lid_mappings (lid, pn, phone, learned_at, seen_count)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(lid) DO UPDATE SET
+         pn = excluded.pn,
+         phone = COALESCE(excluded.phone, lid_mappings.phone),
+         learned_at = excluded.learned_at,
+         seen_count = lid_mappings.seen_count + 1`,
+    );
+    // node:sqlite tidak punya helper .transaction() (itu API better-sqlite3),
+    // jadi transaksi ditulis eksplisit.
+    db.exec('BEGIN');
+    try {
+      for (const r of rows) stmt.run(r.lid, r.pn, r.phone, r.learned_at, r.seen_count);
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+  } catch (e) {
+    console.warn('[db] Gagal menyimpan lid_mappings:', e);
+  }
+}
+
+/** Buang mapping lama supaya tabel tidak tumbuh tanpa batas. */
+export function pruneLidMappings(keep: number): number {
+  try {
+    const res = db.prepare(
+      `DELETE FROM lid_mappings WHERE lid NOT IN (
+         SELECT lid FROM lid_mappings ORDER BY learned_at DESC LIMIT ?
+       )`,
+    ).run(keep);
+    return Number(res.changes || 0);
+  } catch (e) {
+    console.warn('[db] Gagal prune lid_mappings:', e);
+    return 0;
+  }
+}
+
+// ============ Health Monitor persistence ============
+
+/** Simpan skor risiko + ringkasan state kesehatan sesi. */
+export function setSessionHealth(sessionId: string, score: number, healthState: string | null): void {
+  try {
+    db.prepare('UPDATE sessions SET risk_score = ?, health_state = ? WHERE id = ?')
+      .run(score, healthState, sessionId);
+  } catch (e) {
+    console.warn(`[db] Gagal menyimpan health state ${sessionId}:`, e);
+  }
+}
+
 export function getSessionAntiBanSettings(sessionId: string): { preset: string; config: any | null } {
   const row = db.prepare('SELECT antiban_preset, antiban_config FROM sessions WHERE id = ?').get(sessionId) as any;
   let parsedConfig = null;
@@ -809,13 +962,25 @@ export function setSetting(key: string, value: string): void {
 const QUEUE_PAUSE_SESSIONS_KEY = 'queue_paused_sessions';
 const QUEUE_PAUSE_BATCHES_KEY = 'queue_paused_batches';
 
+export interface PersistedPauseEntry {
+  isPaused: boolean;
+  reason?: string;
+  /**
+   * Epoch ms saat jeda boleh dibuka otomatis.
+   * Kosong = jeda ini menunggu aksi manual (mis. guard handshake contactGraph
+   * yang tidak punya tenggat). Tanpa field ini, jeda berjangka yang terpotong
+   * restart akan berubah menjadi jeda permanen tanpa cara pulih.
+   */
+  needsResumeAt?: number;
+}
+
 export interface PersistedPauseState {
-  sessions: Record<string, { isPaused: boolean; reason?: string }>;
-  batches: Record<string, { isPaused: boolean; reason?: string }>;
+  sessions: Record<string, PersistedPauseEntry>;
+  batches: Record<string, PersistedPauseEntry>;
 }
 
 export function loadQueuePauseState(): PersistedPauseState {
-  const parse = (key: string): Record<string, { isPaused: boolean; reason?: string }> => {
+  const parse = (key: string): Record<string, PersistedPauseEntry> => {
     try {
       const raw = getSetting(key);
       if (!raw) return {};
@@ -832,7 +997,7 @@ export function saveQueuePauseState(state: PersistedPauseState): void {
   try {
     // Hanya simpan entri yang benar-benar sedang dijeda; entri non-jeda dibuang
     // agar tabel tidak menumpuk data basi.
-    const prune = (m: Record<string, { isPaused: boolean; reason?: string }>) =>
+    const prune = (m: Record<string, PersistedPauseEntry>) =>
       Object.fromEntries(Object.entries(m).filter(([, v]) => v?.isPaused));
     setSetting(QUEUE_PAUSE_SESSIONS_KEY, JSON.stringify(prune(state.sessions)));
     setSetting(QUEUE_PAUSE_BATCHES_KEY, JSON.stringify(prune(state.batches)));

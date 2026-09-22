@@ -4,7 +4,6 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
-  jidNormalizedUser,
   type WASocket,
   type AnyMessageContent,
 } from '@whiskeysockets/baileys';
@@ -122,6 +121,31 @@ export class BaileysEngine {
         }
       }
     });
+    // Read receipt datang lewat event TERPISAH dari messages.update.
+    // Ini jalur yang paling andal untuk status 'read'/'delivered', karena
+    // receipt dikirim ulang setelah reconnect — sedangkan messages.update
+    // tidak. Tanpa listener ini, pesan yang sudah dibaca tetap tampil 'sent'.
+    socket.ev.on('message-receipt.update', (updates) => {
+      for (const u of updates || []) {
+        const waId = u?.key?.id;
+        if (!waId) continue;
+        const msg = getMessageByWaId(waId) || getMessageById(waId);
+        if (!msg) continue;
+
+        const receipt = (u as any).receipt || {};
+        // readTimestamp = pesan dibaca; playedTimestamp = media diputar.
+        // receiptTimestamp hanya menandai sampai di perangkat penerima.
+        const hasRead = Boolean(receipt.readTimestamp) || Boolean(receipt.playedTimestamp);
+        const hasDelivered = Boolean(receipt.receiptTimestamp);
+
+        if (hasRead) {
+          updateMessageStatus(msg.id, 'read');
+        } else if (hasDelivered) {
+          updateMessageStatus(msg.id, 'delivered');
+        }
+      }
+    });
+
     socket.ev.on('connection.update', async (u) => {
       const s = this.active.get(sessionId);
 
@@ -185,6 +209,13 @@ export class BaileysEngine {
         s.info.status = reason === 'logged_out' ? 'disconnected' : 'connecting';
         s.info.metrics.disconnectCountToday += 1;
         upsertSession(s.info);
+        // Health monitor butuh SEMUA penutupan koneksi, termasuk logged_out —
+        // justru 401 itu sinyal paling berat. onDisconnectCallback di bawah
+        // sengaja dilewati untuk logged_out karena itu memicu reconnect,
+        // jadi jalurnya dipisah agar tidak mengubah perilaku reconnect.
+        try {
+          this.onConnectionCloseCallback?.(sessionId, code, reason);
+        } catch {}
         if (reason !== 'logged_out') {
           this.onDisconnectCallback?.(sessionId);
         }
@@ -210,6 +241,38 @@ export class BaileysEngine {
         if (!msg.key?.fromMe && msg.key?.remoteJid) {
           this.onIncomingCallback?.(sessionId, msg.key.remoteJid);
         }
+        // Pelajari pasangan LID<->PN dari setiap key, termasuk pesan keluar:
+        // key dari pesan kita sendiri juga membawa remoteJidAlt.
+        if (msg.key) {
+          try {
+            this.onMessageKeyCallback?.(sessionId, msg.key);
+          } catch {}
+        }
+      }
+    });
+
+    // Sumber mapping LID<->PN paling kaya: metadata grup.
+    // Baileys mengirim participants dengan bentuk campuran (id/phoneNumber/lid),
+    // dan di sinilah WhatsApp paling konsisten menyertakan kedua bentuk.
+    socket.ev.on('groups.upsert', (groups) => {
+      for (const g of groups || []) {
+        try {
+          const participants = (g as any)?.participants;
+          if (Array.isArray(participants) && participants.length > 0) {
+            this.onGroupMetadataCallback?.(sessionId, participants);
+          }
+        } catch {}
+      }
+    });
+
+    socket.ev.on('groups.update', (updates) => {
+      for (const g of updates || []) {
+        try {
+          const participants = (g as any)?.participants;
+          if (Array.isArray(participants) && participants.length > 0) {
+            this.onGroupMetadataCallback?.(sessionId, participants);
+          }
+        } catch {}
       }
     });
 
@@ -267,8 +330,7 @@ export class BaileysEngine {
   }
 
   private normalizePhone(id: string): string {
-    const cleanId = jidNormalizedUser(id).split('@')[0] || id.split('@')[0].split(':')[0];
-    return cleanId.replace(/[^0-9]/g, '').replace(/^0/, '62');
+    return id.replace(/[^0-9]/g, '').replace(/^0/, '62');
   }
 
   private isReady(s: ActiveSession): boolean {
@@ -563,6 +625,19 @@ export class BaileysEngine {
   onBlocklistCallback: ((sessionId: string, blockedCount: number) => void) | null = null;
   /** Callback saat server WA mengirim update timelock 463 dengan durasi asli */
   onTimelockUpdateCallback: ((sessionId: string, data: { isActive?: boolean; timeEnforcementEnds?: Date | null; enforcementType?: string }) => void) | null = null;
+
+  /** Callback untuk mempelajari pasangan LID<->PN dari key pesan */
+  onMessageKeyCallback: ((sessionId: string, key: any) => void) | null = null;
+
+  /** Callback untuk mempelajari pasangan LID<->PN dari participants grup */
+  onGroupMetadataCallback: ((sessionId: string, participants: any[]) => void) | null = null;
+
+  /**
+   * Callback saat koneksi ditutup, TERMASUK logged_out.
+   * Terpisah dari onDisconnectCallback karena callback itu sengaja tidak
+   * dipanggil untuk logged_out (agar tidak memicu reconnect).
+   */
+  onConnectionCloseCallback: ((sessionId: string, statusCode?: number, reason?: string) => void) | null = null;
   onDisconnectCallback: ((sessionId: string) => void) | null = null;
   onReconnectCallback: ((sessionId: string) => void) | null = null;
   onIncomingCallback: ((sessionId: string, jid: string) => void) | null = null;

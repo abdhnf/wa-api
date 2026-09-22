@@ -12,8 +12,10 @@ export function validatePhoneFormat(phone: string): { valid: boolean; normalized
 }
 
 import { config } from './config.js';
-import { upsertSession, insertMessage, updateMessageStatus, getMessageById, listSessions as dbListSessions, getAntiBanState, saveAntiBanState, getSessionAntiBanSettings, saveSessionAntiBanSettings, getSetting, getUserSetting, getLastSessionForRecipient, resetStuckMessages, getPendingMessages, updateSessionProfile, loadQueuePauseState, saveQueuePauseState } from './db.js';
+import { upsertSession, insertMessage, updateMessageStatus, getMessageById, listSessions as dbListSessions, getAntiBanState, saveAntiBanState, getSessionAntiBanSettings, saveSessionAntiBanSettings, getSetting, getUserSetting, getLastSessionForRecipient, resetStuckMessages, getPendingMessages, updateSessionProfile, loadQueuePauseState, saveQueuePauseState, type PersistedPauseEntry, listLidMappings, upsertLidMappings, pruneLidMappings, setSessionHealth, countMessagesByStatus } from './db.js';
 import { RateLimiter, WarmUp, TimelockGuard, PresenceChoreographer, ReconnectThrottle, BanRecoveryOrchestrator, ReplyRatioGuard, ContactGraphWarmer, DEFAULT_ANTIBAN_CONFIG, DEFAULT_CONTACT_GRAPH_CONFIG, ANTIBAN_PRESETS, type AntiBanPreset, type AntiBanState } from './antiban.js';
+import { LidResolver, type LidMode } from './lid-resolver.js';
+import { HealthMonitor } from './health.js';
 import type { OutboundMessage, SessionInfo, QueueSessionStatus } from './types.js';
 import type { WhatsAppEngine } from './engine/WhatsAppEngine.js';
 import { DeliveryMetrics, type SessionMetricsReport } from './metrics.js';
@@ -27,8 +29,8 @@ export class SessionManager {
   private engine: WhatsAppEngine;
   private priorityQueues = new Map<string, OutboundMessage[]>();
   private normalQueues = new Map<string, OutboundMessage[]>();
-  private pausedSessions = new Map<string, { isPaused: boolean; reason?: string }>();
-  private pausedBatches = new Map<string, { isPaused: boolean; reason?: string }>();
+  private pausedSessions = new Map<string, PersistedPauseEntry>();
+  private pausedBatches = new Map<string, PersistedPauseEntry>();
   private lastServedBatchPerSession = new Map<string, string>();
   /** Timer auto-resume per sesi: antrean yang dijeda otomatis dibuka lagi saat blokir lewat. */
   private autoResumeTimers = new Map<string, NodeJS.Timeout>();
@@ -45,8 +47,159 @@ export class SessionManager {
     contactGraph: ContactGraphWarmer;
   }>();
 
+  /**
+   * LID resolver — satu instance GLOBAL, bukan per session.
+   * Alasan: mapping LID<->PN adalah fakta tentang kontak, bukan tentang sesi.
+   * Dua sesi yang menghubungi nomor yang sama harus berbagi mapping yang sama,
+   * supaya hasil belajar sesi A langsung berguna untuk sesi B.
+   */
+  private lidResolver: LidResolver | null = null;
+
+  /** Health monitor per session — skor risiko terpisah tiap nomor. */
+  private health = new Map<string, HealthMonitor>();
+
+  /** Cache nama JID yang sudah dilaporkan, supaya log mode 'log' tidak spam. */
+  private lidLoggedJids = new Set<string>();
+
   constructor(engine: WhatsAppEngine) {
     this.engine = engine;
+  }
+
+  /**
+   * Resolver LID global, di-hydrate sekali dari SQLite.
+   * Default mode 'log': belajar dan laporkan, tapi JID yang dipakai kirim
+   * TIDAK diubah — lihat catatan rollout di lid-resolver.ts.
+   */
+  getLidResolver(): LidResolver {
+    if (this.lidResolver) return this.lidResolver;
+
+    const mode = (process.env.WA_LID_RESOLVER_MODE as LidMode) || 'log';
+    const resolver = new LidResolver({
+      mode,
+      onResolveChange: (from, to) => {
+        if (this.lidLoggedJids.has(from)) return;
+        this.lidLoggedJids.add(from);
+        console.log(`[lid:${mode}] ${from} -> ${to}`);
+      },
+    });
+
+    // Hydrate dari SQLite. Gagal hydrate tidak boleh menjatuhkan boot.
+    try {
+      const rows = listLidMappings();
+      const loaded = resolver.hydrateSync(rows.map((r) => ({
+        lid: r.lid,
+        pn: r.pn,
+        phone: r.phone ?? undefined,
+        learnedAt: r.learned_at,
+        seenCount: r.seen_count,
+      })));
+      console.log(`[lid] Resolver siap — mode=${mode}, ${loaded} mapping dimuat dari DB`);
+    } catch (e) {
+      console.warn('[lid] Gagal hydrate mapping dari DB, mulai dari kosong:', e);
+    }
+
+    // Persistensi: flush berkala, bukan tiap learn, supaya tidak membanjiri SQLite.
+    setInterval(() => {
+      try {
+        const dirty = resolver.drainDirty();
+        if (dirty.length === 0) return;
+        upsertLidMappings(dirty.map((m) => ({
+          lid: m.lid,
+          pn: m.pn,
+          phone: m.phone ?? null,
+          learned_at: m.learnedAt,
+          seen_count: m.seenCount,
+        })));
+        pruneLidMappings(10_000);
+      } catch (e) {
+        console.warn('[lid] Gagal flush mapping ke DB:', e);
+      }
+    }, 30_000).unref?.();
+
+    this.lidResolver = resolver;
+    return resolver;
+  }
+
+  /**
+   * Pelajari pasangan LID<->PN dari key sebuah pesan.
+   * Baileys menaruh bentuk alternatif di `remoteJidAlt` / `participantAlt`.
+   */
+  learnLidFromMessageKey(key: any): number {
+    if (!key) return 0;
+    const resolver = this.getLidResolver();
+    let learned = 0;
+
+    // Pesan masuk: remoteJid = pengirim, participantAlt = bentuk alternatif
+    learned += resolver.learnFromMessageKey({
+      remoteJid: key.remoteJid,
+      remoteJidAlt: key.remoteJidAlt,
+      participant: key.participant,
+      participantAlt: key.participantAlt,
+    });
+
+    return learned;
+  }
+
+  /** Pelajari pasangan LID<->PN dari metadata grup (sumber mapping terkaya). */
+  learnLidFromGroupMetadata(participants: any[]): number {
+    if (!Array.isArray(participants) || participants.length === 0) return 0;
+    return this.getLidResolver().learnFromGroupMetadata(participants);
+  }
+
+  /** Health monitor per session, dibuat malas. */
+  getHealth(sessionId: string): HealthMonitor {
+    let h = this.health.get(sessionId);
+    if (h) return h;
+
+    h = new HealthMonitor({
+      onRiskChange: (status) => {
+        console.log(
+          `[health:${sessionId}] Risiko ${status.risk.toUpperCase()} (skor ${status.score}) — ${status.reasons[0]}`,
+        );
+        this.persistHealth(sessionId, h!);
+      },
+    });
+
+    // Rehydrate skor dari DB supaya tidak reset ke 0 tiap restart proses.
+    try {
+      const row = dbListSessions().find((s: SessionInfo) => s.id === sessionId);
+      const prevScore = row?.riskScore;
+      if (typeof prevScore === 'number' && prevScore > 0) {
+        h.seedScore(prevScore);
+      }
+    } catch {}
+
+    this.health.set(sessionId, h);
+    return h;
+  }
+
+  /** Tulis skor risiko ke kolom yang sudah ada di tabel sessions. */
+  persistHealth(sessionId: string, h?: HealthMonitor): void {
+    const monitor = h || this.health.get(sessionId);
+    if (!monitor) return;
+    try {
+      const status = monitor.getStatus();
+      setSessionHealth(sessionId, status.score, JSON.stringify({
+        risk: status.risk,
+        reasons: status.reasons,
+        recommendation: status.recommendation,
+        stats: status.stats,
+      }));
+    } catch (e) {
+      console.warn(`[health:${sessionId}] Gagal persist skor risiko:`, e);
+    }
+  }
+
+  /** Catat event kesehatan dari disconnect socket. */
+  recordDisconnectHealth(sessionId: string, reason?: string): void {
+    this.getHealth(sessionId).recordDisconnect(reason ?? 'unknown');
+    this.persistHealth(sessionId);
+  }
+
+  /** Catat event kesehatan dari pesan yang gagal terkirim. */
+  recordMessageFailedHealth(sessionId: string, reason?: string): void {
+    this.getHealth(sessionId).recordMessageFailed(reason);
+    this.persistHealth(sessionId);
   }
 
   /** Load / init anti-ban state per session dari SQLite */
@@ -233,14 +386,38 @@ export class SessionManager {
    * Pulihkan status jeda dari SQLite. Dipanggil saat startup bersama
    * recoverPendingMessages() agar jeda yang diset operator tidak hilang
    * ketika service di-restart.
+   *
+   * Jeda yang punya `needsResumeAt` dijadwalkan ULANG di sini. Tanpa itu, jeda
+   * berjangka (rate limit, timelock) yang terpotong restart akan berubah menjadi
+   * jeda permanen: flag-nya pulih, tapi timer yang akan membukanya hilang.
+   * Jeda tanpa `needsResumeAt` sengaja dibiarkan menunggu aksi operator.
    */
   restoreQueuePauseState(): number {
     const state = loadQueuePauseState();
     let restored = 0;
+    let rescheduled = 0;
+    const now = Date.now();
+
     for (const [sid, v] of Object.entries(state.sessions)) {
-      if (v?.isPaused) {
-        this.pausedSessions.set(sid, { isPaused: true, reason: v.reason });
-        restored++;
+      if (!v?.isPaused) continue;
+      this.pausedSessions.set(sid, {
+        isPaused: true,
+        reason: v.reason,
+        needsResumeAt: v.needsResumeAt,
+      });
+      restored++;
+
+      if (typeof v.needsResumeAt === 'number' && Number.isFinite(v.needsResumeAt)) {
+        const remaining = v.needsResumeAt - now;
+        if (remaining <= 0) {
+          // Tenggat sudah lewat saat proses mati — buka langsung, bukan tunda lagi.
+          console.log(`[queue-pause] Jeda sesi ${sid} sudah kedaluwarsa, antrean dibuka.`);
+          this.pausedSessions.set(sid, { isPaused: false, reason: undefined });
+          rescheduled++;
+        } else {
+          this.scheduleAutoResume(sid, remaining);
+          rescheduled++;
+        }
       }
     }
     for (const [bid, v] of Object.entries(state.batches)) {
@@ -250,7 +427,7 @@ export class SessionManager {
       }
     }
     if (restored > 0) {
-      console.log(`[queue-pause] Memulihkan ${restored} status jeda antrean dari database.`);
+      console.log(`[queue-pause] Memulihkan ${restored} status jeda antrean dari database (${rescheduled} dijadwalkan ulang).`);
     }
     return restored;
   }
@@ -285,6 +462,16 @@ export class SessionManager {
     if (existing) clearTimeout(existing);
 
     this.autoResumeWaitMs.set(sessionId, waitMs);
+
+    // Simpan tenggat ke DB. Timer hilang saat proses mati, tapi tenggat ini
+    // memungkinkan restoreQueuePauseState() menjadwalkan ulang setelah restart —
+    // tanpa ini, jeda berjangka berubah menjadi jeda permanen.
+    const current = this.pausedSessions.get(sessionId);
+    if (current?.isPaused) {
+      this.pausedSessions.set(sessionId, { ...current, needsResumeAt: Date.now() + waitMs });
+      this.persistQueuePauseState();
+    }
+
     const timer = setTimeout(() => {
       this.autoResumeTimers.delete(sessionId);
       this.autoResumeWaitMs.delete(sessionId);
@@ -364,6 +551,18 @@ export class SessionManager {
     const pauseInfo = this.pausedSessions.get(sessionId);
     const pendingCount = (this.normalQueues.get(sessionId) || []).length;
     const priorityPendingCount = (this.priorityQueues.get(sessionId) || []).length;
+    // Agregasi per status dihitung di SQL atas SELURUH riwayat sesi. Panel
+    // memakai angka ini untuk kartu statistik, supaya tidak lagi menghitung
+    // dari baris yang kebetulan sedang tampil di halaman tabel.
+    let byStatus: Record<string, number> = {};
+    let totalMessages = 0;
+    try {
+      const agg = countMessagesByStatus(sessionId);
+      byStatus = agg.byStatus;
+      totalMessages = agg.total;
+    } catch (e) {
+      console.warn(`[session:${sessionId}] Gagal agregasi status pesan:`, e);
+    }
     return {
       sessionId,
       isPaused: Boolean(pauseInfo?.isPaused),
@@ -372,6 +571,8 @@ export class SessionManager {
       priorityPendingCount,
       vipPendingCount: priorityPendingCount,
       autoResumeInMs: this.autoResumeWaitMs.get(sessionId) ?? null,
+      byStatus,
+      totalMessages,
     };
   }
 
@@ -439,10 +640,14 @@ export class SessionManager {
   }
 
   /** Socket disconnect — beri tahu reconnectThrottle */
-  onDisconnect(sessionId: string): void {
+  onDisconnect(sessionId: string, reason?: string): void {
     const ab = this.getAntiBan(sessionId);
     ab.reconnect.onDisconnect();
     this.persistAntiBan(sessionId);
+    // Catat ke health monitor. `reason` diisi kode status HTTP dari socket
+    // (401 loggedOut / 403 forbidden / kode lain) kalau engine mengirimkannya.
+    this.getHealth(sessionId).recordDisconnect(reason ?? 'unknown');
+    this.persistHealth(sessionId);
   }
 
   /** Socket reconnect — mulai ramping kecepatan */
@@ -466,6 +671,9 @@ export class SessionManager {
       const ab = this.getAntiBan(sessionId);
       ab.timelock.record463Error();
       this.persistAntiBan(sessionId);
+      // 463 = reachout timelock resmi dari server WA. Ini sinyal berat.
+      this.getHealth(sessionId).recordReachoutTimelock('463');
+      this.persistHealth(sessionId);
 
       // Query langsung durasi sanksi resmi dari WhatsApp server
       if (typeof this.engine.fetchReachoutTimelock === 'function') {
@@ -681,6 +889,9 @@ export class SessionManager {
           ...ab.contactGraph.getStats(),
           batchApprovals: ab.contactGraph.getBatchApprovals(),
         },
+        // Health monitor: skor risiko ban, alasan, dan rekomendasi tindakan.
+        health: this.getHealth(sessionId).getStatus(),
+        lid: this.getLidResolver().getStats(),
       };
     } catch (e) {
       return null;
@@ -857,7 +1068,9 @@ export class SessionManager {
         }
         msg.to = formatCheck.normalized;
 
-        const jid = `${msg.to}@s.whatsapp.net`;
+        // JID kanonik: buang device suffix, lalu resolve LID<->PN.
+        // Mode default 'log' hanya melaporkan; 'enforce' baru mengubah JID.
+        const jid = this.getLidResolver().resolveCanonical(`${msg.to}@s.whatsapp.net`, 'processQueue');
         const content = msg.text || msg.caption || '';
 
         // 3b. Whitelist penerima kampanye.
@@ -881,7 +1094,7 @@ export class SessionManager {
         // antrean), melainkan dikembalikan ke depan antrean lalu antrean dijeda
         // sampai waktu blokirnya lewat — lihat scheduleAutoResume().
         if (!isHighPriority) {
-          let blocked: { reason: string; retryInMs: number } | null = null;
+          let blocked: { reason: string; retryInMs: number; needsHandshake?: boolean } | null = null;
 
           const recoveryDecision = ab.recovery.beforeSend();
           if (!recoveryDecision.allowed) {
@@ -905,7 +1118,11 @@ export class SessionManager {
           if (!blocked) {
             const cg = ab.contactGraph.canMessage(jid, msg.batchId);
             if (!cg.allowed) {
-              blocked = { reason: `🕸️ ${cg.reason}`, retryInMs: ab.contactGraph.remainingMs(jid) };
+              blocked = {
+                reason: `🕸️ ${cg.reason}`,
+                retryInMs: ab.contactGraph.remainingMs(jid),
+                needsHandshake: cg.needsHandshake,
+              };
             }
           }
 
@@ -913,7 +1130,15 @@ export class SessionManager {
             console.warn(`[session:${sessionId}] ${blocked.reason} — pesan ditahan, antrean dijeda sementara.`);
             this.holdMessageAtFront(sessionId, msg);
             this.pauseQueue(sessionId, blocked.reason);
-            this.scheduleAutoResume(sessionId, blocked.retryInMs);
+            // Handshake contactGraph menunggu aksi (kontak harus jadi 'known'
+            // dulu), bukan menunggu waktu. Auto-resume di sini akan berputar:
+            // dibuka, diblokir lagi, dijadwalkan lagi. Jadi jeda ini dibiarkan
+            // menunggu operator — sengaja TANPA needsResumeAt.
+            if (blocked.needsHandshake) {
+              console.warn(`[session:${sessionId}] Jeda menunggu handshake manual — tidak dijadwalkan auto-resume.`);
+            } else {
+              this.scheduleAutoResume(sessionId, blocked.retryInMs);
+            }
             break;
           }
         }
@@ -1007,6 +1232,10 @@ export class SessionManager {
           updateMessageStatus(msg.id, 'failed', errMsg);
           msg.status = 'failed';
           this.metrics.recordError(sessionId, errMsg);
+          // Satu pesan gagal belum berarti apa-apa; health monitor baru
+          // menaikkan skor kalau ambangnya terlampaui (default 5/jam).
+          this.getHealth(sessionId).recordMessageFailed(errMsg);
+          this.persistHealth(sessionId);
           if (/463|reachout|restricted/i.test(errMsg)) {
             await this.record463(sessionId);
             ab.recovery.reportError('timelock', errMsg);
