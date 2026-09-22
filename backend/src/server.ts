@@ -260,7 +260,7 @@ app.post('/api/v1/auth/login', async (req, reply) => {
   recordLoginSuccess(clientIp);
 
   const token = app.jwt.sign({ id: user.id, role: user.role, email: user.email });
-  return { token, user: { id: user.id, name: user.name, email: user.email, role: user.role, apiKey: user.apiKey, quotaPerDay: user.quotaPerDay, usedToday: user.usedToday } };
+  return { token, user: { id: user.id, name: user.name, email: user.email, role: user.role, apiKey: user.apiKey, quotaPerDay: user.quotaPerDay, usedToday: user.usedToday, hasBlastPin: !!user.blastPinHash } };
 });
 
 // Ambil profil user saat ini (termasuk API key & quota)

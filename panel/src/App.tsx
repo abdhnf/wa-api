@@ -145,7 +145,23 @@ export const App: React.FC = () => {
   };
 
   if (!auth.token || !auth.user) {
-    return <AuthPage onLoginSuccess={() => setAuth(getStoredAuth())} />;
+    return (
+      <AuthPage
+        onLoginSuccess={() => {
+          setAuth(getStoredAuth());
+          // Segarkan profil dari server setelah login. Response login tidak
+          // memuat seluruh field akun, dan `apiGetMyProfile()` juga menulis
+          // ulang `wa_user` di localStorage — tanpa ini modal Blast membaca
+          // status PIN yang basi dan menampilkan form "Belum Mengatur PIN"
+          // padahal PIN-nya sudah ada (berujung menimpa PIN lama).
+          apiGetMyProfile()
+            .then((p) => {
+              if (p && !p.error) setAuth(getStoredAuth());
+            })
+            .catch(() => {});
+        }}
+      />
+    );
   }
 
   const navButton = (
