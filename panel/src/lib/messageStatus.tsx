@@ -45,20 +45,27 @@ interface StatusStyle {
   Icon: typeof Clock;
   /** Animasi untuk status yang sedang bergerak. */
   pulse?: boolean;
+  /**
+   * Penjelasan singkat untuk tooltip.
+   * Penting untuk membedakan status yang terlihat mirip tapi tindakannya
+   * berbeda jauh — terutama `queued` (belum pernah dicoba kirim, tidak ada
+   * gunanya retry) versus `failed` (sudah dicoba dan ditolak, retry masuk akal).
+   */
+  hint: string;
 }
 
 export const MESSAGE_STATUS: Record<MessageStatus, StatusStyle> = {
-  pending: { label: 'Pending', tone: 'neutral', Icon: Clock },
-  queued: { label: 'Queued', tone: 'neutral', Icon: Clock },
-  pacing: { label: 'Pacing', tone: 'wait', Icon: Clock },
-  sending: { label: 'Sending', tone: 'active', Icon: Zap, pulse: true },
-  sent: { label: 'Sent', tone: 'active', Icon: Send },
-  delivered: { label: 'Delivered', tone: 'ok', Icon: CheckCircle2 },
-  read: { label: 'Read', tone: 'ok', Icon: CheckCheck },
-  failed: { label: 'Failed', tone: 'error', Icon: AlertTriangle },
-  invalid_number: { label: 'Invalid Number', tone: 'error', Icon: AlertTriangle },
-  not_registered: { label: 'Not Registered', tone: 'error', Icon: AlertTriangle },
-  cancelled: { label: 'Cancelled', tone: 'neutral', Icon: XCircle },
+  pending: { label: 'Pending', tone: 'neutral', Icon: Clock, hint: 'Menunggu masuk antrean pengiriman.' },
+  queued: { label: 'Queued', tone: 'neutral', Icon: Clock, hint: 'Masih di antrean — belum pernah dicoba kirim. Retry tidak diperlukan; cukup lanjutkan antreannya.' },
+  pacing: { label: 'Pacing', tone: 'wait', Icon: Clock, hint: 'Sedang menunggu jeda anti-ban sebelum dikirim.' },
+  sending: { label: 'Sending', tone: 'active', Icon: Zap, pulse: true, hint: 'Sedang dikirim ke server WhatsApp.' },
+  sent: { label: 'Sent', tone: 'active', Icon: Send, hint: 'Sampai di server WhatsApp, belum tentu sampai ke penerima.' },
+  delivered: { label: 'Delivered', tone: 'ok', Icon: CheckCircle2, hint: 'Sampai di perangkat penerima.' },
+  read: { label: 'Read', tone: 'ok', Icon: CheckCheck, hint: 'Sudah dibaca penerima.' },
+  failed: { label: 'Failed', tone: 'error', Icon: AlertTriangle, hint: 'Gagal terkirim. Retry masuk akal kalau penyebabnya sementara.' },
+  invalid_number: { label: 'Invalid Number', tone: 'error', Icon: AlertTriangle, hint: 'Format nomor tidak valid. Retry tidak akan menolong.' },
+  not_registered: { label: 'Not Registered', tone: 'error', Icon: AlertTriangle, hint: 'Nomor tidak terdaftar di WhatsApp. Retry tidak akan menolong.' },
+  cancelled: { label: 'Cancelled', tone: 'neutral', Icon: XCircle, hint: 'Dibatalkan sebelum dikirim.' },
 };
 
 /** `invalid_number` -> `Invalid Number` untuk status yang belum dipetakan. */
@@ -100,7 +107,7 @@ export const MessageStatusBadge: React.FC<MessageStatusBadgeProps> = ({
   return (
     <span
       className={`inline-flex items-center gap-1 rounded border ${size} ${TONE_CLASS[tone]}`}
-      title={status}
+      title={style?.hint ?? status}
     >
       <Icon size={iconSize} className={style?.pulse ? 'animate-pulse' : undefined} />
       {label}

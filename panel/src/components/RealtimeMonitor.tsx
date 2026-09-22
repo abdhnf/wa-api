@@ -4,7 +4,7 @@ import {
   CheckCircle2, CheckCheck, Clock, AlertTriangle, Send, Sliders, Loader2,
   FileText, Image as ImageIcon, MapPin, Users, XCircle,
   ArrowUpRight, ShieldCheck, UserCheck, Radio, Sparkles, Settings2, HelpCircle, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
-  Search
+  Search, Info, Timer
 } from 'lucide-react';
 import { type QueueItem, type Session, EMPTY_SESSIONS, EMPTY_QUEUE } from '../dummyData';
 import { MessageStatusBadge } from '../lib/messageStatus';
@@ -12,6 +12,107 @@ import { apiGetSessions, apiGetSessionMessages, apiSendBulk, apiGetAntiBan, apiU
 import { Toast } from './Toast';
 import { AutoRotateSettings } from './AutoRotateSettings';
 import { AdminCommandCenter } from './AdminCommandCenter';
+
+/**
+ * Terjemahkan alasan jeda dari backend menjadi kalimat yang bisa ditindaklanjuti.
+ *
+ * Backend menyimpan `reason` sebagai kalimat bebas yang kadang membawa emoji
+ * dan istilah internal (`contactGraph`, `handshake`, `reply ratio`). Operator
+ * tidak perlu tahu nama kelas guard-nya — yang perlu dia tahu: ini menunggu
+ * waktu, menunggu keputusan dia, atau menunggu balasan orang lain.
+ */
+type PauseKind = 'auto' | 'manual' | 'external' | 'unknown';
+
+interface PauseInfo {
+  kind: PauseKind;
+  title: string;
+  detail: string;
+  /** Butuh tindakan operator untuk bisa lanjut. */
+  needsAction: boolean;
+}
+
+export function classifyPauseReason(reason?: string): PauseInfo {
+  const raw = (reason || '').trim();
+  // Alasan tersimpan dengan emoji di depan ("🕸️ Handshake required..."), dan
+  // beberapa guard menuliskan istilahnya dalam bahasa Inggris.
+  const text = raw.toLowerCase().replace(/[^\p{L}\p{N}\s./-]/gu, ' ').replace(/\s+/g, ' ').trim();
+
+  if (!text) {
+    return {
+      kind: 'unknown',
+      title: 'Antrean dijeda',
+      detail: 'Backend tidak menyertakan alasan. Buka log sesi untuk detailnya.',
+      needsAction: true,
+    };
+  }
+
+  if (text.includes('handshake')) {
+    return {
+      kind: 'external',
+      title: 'Menunggu balasan kontak baru',
+      detail:
+        'Preset contact graph menahan pesan pertama ke kontak yang belum pernah berinteraksi. ' +
+        'Pesan akan terkirim setelah kontak itu membalas, atau kamu lanjutkan paksa sekarang.',
+      needsAction: true,
+    };
+  }
+
+  if (text.includes('reply ratio') || text.includes('rasio balasan')) {
+    return {
+      kind: 'external',
+      title: 'Menunggu rasio balasan pulih',
+      detail:
+        'Terlalu banyak pesan keluar dibanding balasan masuk. Kirim pesan hanya setelah ada ' +
+        'balasan masuk, atau lanjutkan paksa dan terima risiko pembatasan.',
+      needsAction: true,
+    };
+  }
+
+  if (text.includes('rate limit') || text.includes('batas') || text.includes('kuota')) {
+    return {
+      kind: 'auto',
+      title: 'Menunggu batas laju',
+      detail: 'Kuota kirim per menit/jam tercapai. Antrean lanjut otomatis setelah jendela waktu lewat.',
+      needsAction: false,
+    };
+  }
+
+  if (text.includes('timelock') || text.includes('terkunci sementara')) {
+    return {
+      kind: 'auto',
+      title: 'Menunggu timelock berakhir',
+      detail: 'WhatsApp memberi jeda sementara. Antrean lanjut otomatis setelah timelock selesai.',
+      needsAction: false,
+    };
+  }
+
+  if (text.includes('manual') || text.includes('dijeda manual') || text.includes('pengguna')) {
+    return {
+      kind: 'manual',
+      title: 'Dijeda manual',
+      detail: 'Antrean dihentikan oleh operator. Lanjutkan kalau sudah siap mengirim lagi.',
+      needsAction: true,
+    };
+  }
+
+  return {
+    kind: 'unknown',
+    title: 'Antrean dijeda',
+    detail: raw,
+    needsAction: true,
+  };
+}
+
+/** Ubah milidetik jadi frasa pendek: "45 detik", "12 menit", "2 jam". */
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return 'sebentar lagi';
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec} detik`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min} menit`;
+  const jam = Math.round(min / 60);
+  return `${jam} jam`;
+}
 
 export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = false }) => {
   const [subTab, setSubTab] = useState<'monitor' | 'autorotate' | 'command_center'>('monitor');
@@ -48,8 +149,10 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
    const q = recipientSearchQuery.trim().toLowerCase();
    return batchApprovalData.recipients.filter((jid) => jid.toLowerCase().includes(q));
  }, [batchApprovalData, recipientSearchQuery]);
- const [queueStatus, setQueueStatus] = useState<{ isPaused: boolean; pauseReason?: string; pendingCount: number; priorityPendingCount?: number; vipPendingCount?: number } | null>(null);
+ const [queueStatus, setQueueStatus] = useState<{ isPaused: boolean; pauseReason?: string; pendingCount: number; priorityPendingCount?: number; vipPendingCount?: number; autoResumeInMs?: number | null; byStatus?: Record<string, number>; totalMessages?: number } | null>(null);
  const [pausingQueue, setPausingQueue] = useState(false);
+ /** Terjemahan alasan jeda + apakah operator perlu bertindak. */
+ const pauseInfo = useMemo(() => classifyPauseReason(queueStatus?.pauseReason), [queueStatus?.pauseReason]);
  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -79,11 +182,31 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  const selectedSession = sessions.find(s => s.id === selectedSessionId) || sessions[0];
 
  // Metrik terpisah: Antrean, Delivered, dan Gagal
- const pendingCount = queue.filter(q => q.status === 'pending' || q.status === 'pacing' || q.status === 'sending').length;
- const deliveredCount = queue.filter(q => q.status === 'delivered' || q.status === 'read').length;
- const sentCount = queue.filter(q => q.status === 'sent').length;
- const failedCount = queue.filter(q => q.status === 'failed' || q.status === 'invalid_number' || q.status === 'not_registered').length;
- const totalCount = queue.length;
+ // Kartu statistik dihitung dari agregasi SELURUH riwayat sesi (`byStatus`
+ // dari backend), bukan dari array `queue` yang cuma berisi baris halaman
+ // aktif. Sebelumnya angka ini berubah saat operator pindah halaman atau
+ // mengubah "Tampilkan: N baris".
+ const byStatus = queueStatus?.byStatus;
+ const hasFullStats = !!byStatus && Object.keys(byStatus).length > 0;
+
+ // Fallback ke hitungan halaman aktif kalau backend belum mengirim byStatus,
+ // supaya kartu tidak menampilkan nol yang menyesatkan.
+ const countOf = (statuses: string[]): number =>
+   hasFullStats
+     ? statuses.reduce((n, st) => n + (byStatus![st] || 0), 0)
+     : queue.filter(q => statuses.includes(q.status)).length;
+
+ // Benar-benar ada di antrean memori dan akan segera dikirim.
+ const inFlightCount = countOf(['pending', 'pacing', 'sending']);
+ // Tersimpan di DB tapi belum dimuat ke antrean memori. Dipisah karena
+ // tindakannya beda: yang ini butuh jeda antrean dilepas dulu.
+ const queuedCount = countOf(['queued']);
+ const pendingCount = inFlightCount + queuedCount;
+ const deliveredCount = countOf(['delivered', 'read']);
+ const sentCount = countOf(['sent']);
+ const failedCount = countOf(['failed', 'invalid_number', 'not_registered']);
+ const cancelledCount = countOf(['cancelled']);
+ const totalCount = hasFullStats ? (queueStatus?.totalMessages ?? 0) : queue.length;
 
  // Fetch sessions real + auto-refresh 10s
  const fetchSessions = useCallback(async () => {
@@ -129,6 +252,24 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  // Fetch antrean pesan REAL dari backend (bukan simulasi)
  const fetchQueue = useCallback(async () => {
  if (!selectedSessionId) return;
+ // Status jeda antrean diambil terpisah dari daftar pesan. Tanpa ini panel
+ // tidak pernah tahu antrean sedang dijeda — tombolnya selalu tampil
+ // "Jeda Antrean" walaupun backend menahan pengiriman.
+ try {
+   const qs = await apiGetQueueStatus(selectedSessionId);
+   if (qs && typeof qs.isPaused === 'boolean') {
+     setQueueStatus({
+       isPaused: qs.isPaused,
+       pauseReason: qs.pauseReason,
+       pendingCount: qs.pendingCount ?? 0,
+       priorityPendingCount: qs.priorityPendingCount,
+       vipPendingCount: qs.vipPendingCount,
+       autoResumeInMs: qs.autoResumeInMs ?? null,
+       byStatus: qs.byStatus,
+       totalMessages: qs.totalMessages,
+     });
+   }
+ } catch {}
  try {
  // Ambil status anti-ban aktual session
  try {
@@ -517,9 +658,21 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  <Zap size={18} className={pendingCount > 0 ?"animate-pulse" :""} />
  </span>
  </div>
- <div className="mt-3 pt-3 border-t border-line/80 flex items-center justify-between text-[11px] text-ink-muted">
- <span>Pacing Anti-Ban aktif</span>
- <span className="font-mono text-honey-deep">{pendingCount > 0 ?"Sedang jalan" :"Antrean kosong"}</span>
+ <div className="mt-3 pt-3 border-t border-line/80 space-y-1 text-[11px] text-ink-muted">
+ <div className="flex items-center justify-between">
+ <span>Sedang diproses</span>
+ <span className="font-mono text-honey-deep">{inFlightCount}</span>
+ </div>
+ {queuedCount > 0 && (
+ <div className="flex items-center justify-between">
+ <span>Tertahan di antrean</span>
+ <span className="font-mono text-clay-deep">{queuedCount}</span>
+ </div>
+ )}
+ <div className="flex items-center justify-between">
+ <span>Pacing Anti-Ban</span>
+ <span className="font-mono text-honey-deep">{inFlightCount > 0 ?"Sedang jalan" :"Antrean kosong"}</span>
+ </div>
  </div>
  </div>
 
@@ -541,7 +694,7 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  </div>
  <div className="mt-3 pt-3 border-t border-line/80 flex items-center justify-between text-[11px] text-ink-muted">
  <span>Terkirim server: <strong className="text-sea font-mono">{sentCount}</strong></span>
- <span className="font-mono text-pine-deep">{totalCount > 0 ? `${Math.round(((deliveredCount + sentCount) / totalCount) * 100)}%` :"100%"}</span>
+ <span className="font-mono text-pine-deep">{(() => { const denom = totalCount - cancelledCount; return denom > 0 ? `${Math.round(((deliveredCount + sentCount) / denom) * 100)}%` :"100%"; })()}</span>
  </div>
  </div>
 
@@ -561,9 +714,17 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  <ShieldAlert size={18} />
  </span>
  </div>
- <div className="mt-3 pt-3 border-t border-line/80 flex items-center justify-between text-[11px] text-ink-muted">
+ <div className="mt-3 pt-3 border-t border-line/80 space-y-1 text-[11px] text-ink-muted">
+ <div className="flex items-center justify-between">
  <span>Format salah / reachout limit</span>
  <span className="font-mono text-clay-deep">{failedCount > 0 ?"Periksa nomor" :"Nol kendala"}</span>
+ </div>
+ {cancelledCount > 0 && (
+ <div className="flex items-center justify-between">
+ <span>Dibatalkan</span>
+ <span className="font-mono text-ink-soft">{cancelledCount}</span>
+ </div>
+ )}
  </div>
  </div>
 
@@ -886,7 +1047,7 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
          {queueStatus?.isPaused ? (
            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-honey-wash/60 border border-honey-line/80 text-honey-deep whitespace-nowrap">
              <Pause size={12} />
-             Dijeda ({queueStatus.pauseReason || 'Manual'})
+             {pauseInfo.title}
            </span>
          ) : (
            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-pine-wash/50 border border-pine-line/60 text-pine whitespace-nowrap">
@@ -910,7 +1071,9 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
            ) : queueStatus?.isPaused ? (
              <>
                <Play size={12} />
-               Lanjutkan Antrean
+               {queueStatus.pendingCount > 0
+                 ? `Lanjutkan Antrean (${queueStatus.pendingCount} pesan tertahan)`
+                 : 'Lanjutkan Antrean'}
              </>
            ) : (
              <>
@@ -944,6 +1107,47 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
      </div>
    </div>
 
+ {/* Penjelasan jeda: operator perlu tahu APA yang menahan dan APA yang bisa
+     dilakukan. Tanpa ini tombol "Lanjutkan Antrean" cuma tebakan. */}
+ {queueStatus?.isPaused && (
+   <div
+     className={`px-3.5 sm:px-4 py-3 border-b flex items-start gap-2.5 ${
+       pauseInfo.needsAction
+         ? 'bg-honey-wash/40 border-honey-line/50'
+         : 'bg-sea-wash/40 border-sea-line/50'
+     }`}
+   >
+     {pauseInfo.needsAction ? (
+       <AlertTriangle size={14} className="text-honey-deep shrink-0 mt-0.5" />
+     ) : (
+       <Timer size={14} className="text-sea shrink-0 mt-0.5" />
+     )}
+     <div className="min-w-0 flex-1">
+       <p className={`text-xs font-semibold ${pauseInfo.needsAction ? 'text-honey-deep' : 'text-sea'}`}>
+         {pauseInfo.title}
+         {queueStatus.pendingCount > 0 && (
+           <span className="font-normal text-ink-muted">
+             {' '}— {queueStatus.pendingCount} pesan menunggu
+           </span>
+         )}
+       </p>
+       <p className="text-[11px] text-ink-muted mt-0.5 leading-relaxed">{pauseInfo.detail}</p>
+       {typeof queueStatus.autoResumeInMs === 'number' && queueStatus.autoResumeInMs > 0 && (
+         <p className="text-[11px] text-ink-muted mt-1 flex items-center gap-1">
+           <Info size={11} className="shrink-0" />
+           Lanjut otomatis dalam {formatDuration(queueStatus.autoResumeInMs)}.
+         </p>
+       )}
+       {!pauseInfo.needsAction && !queueStatus.autoResumeInMs && (
+         <p className="text-[11px] text-ink-muted mt-1 flex items-center gap-1">
+           <Info size={11} className="shrink-0" />
+           Tidak butuh tindakan — antrean lanjut sendiri.
+         </p>
+       )}
+     </div>
+   </div>
+ )}
+
  {queue.length === 0 ? (
  <div className="p-10 text-center">
  <p className="text-xs text-ink-faint">
@@ -967,6 +1171,9 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
    <tbody className="divide-y divide-line/70">
      {queue.map(item => {
        const isFailed = item.status === 'failed' || item.status === 'invalid_number';
+       // `queued` = belum pernah dicoba kirim. Dibedakan dari `failed` supaya
+       // operator tidak menekan Retry untuk pesan yang belum pernah gagal.
+       const isQueued = item.status === 'queued' || item.status === 'pending';
        const isRetrying = retryingIds.has(item.id);
        return (
          <tr key={item.id} className="hover:bg-surface-alt/40 transition">
@@ -996,6 +1203,20 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
                >
                  {isRetrying ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
                  <span>Retry</span>
+               </button>
+             ) : isQueued && queueStatus?.isPaused ? (
+               // Pesan ini tertahan karena antreannya dijeda — bukan karena gagal.
+               // Tindakan yang benar adalah melepas jeda, bukan retry (retry hanya
+               // menggandakan baris antrean untuk pesan yang belum pernah dicoba).
+               <button
+                 type="button"
+                 disabled={pausingQueue}
+                 onClick={handleToggleQueuePause}
+                 className="inline-flex items-center gap-1 px-2 py-1 rounded bg-pine-wash/70 hover:bg-pine-wash border border-pine-line/70 text-pine text-[11px] font-medium transition cursor-pointer disabled:opacity-50"
+                 title="Pesan ini belum pernah dicoba kirim — lanjutkan antreannya"
+               >
+                 {pausingQueue ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
+                 <span>Lanjutkan</span>
                </button>
              ) : (
                <span className="text-[10px] text-ink-faint">-</span>

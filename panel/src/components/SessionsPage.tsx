@@ -17,6 +17,8 @@ import {
  apiUpdateSessionProfile
 } from '../api';
 import { Toast } from './Toast';
+import { RiskBadge, RiskBar, RiskDetail, scoreToRisk, type HealthStatus } from '../lib/sessionHealth';
+import { apiGetAntiBan } from '../api';
 
 export const SessionsPage: React.FC = () => {
  const [sessions, setSessions] = useState<Session[]>(EMPTY_SESSIONS);
@@ -38,6 +40,8 @@ export const SessionsPage: React.FC = () => {
  const [savingRename, setSavingRename] = useState(false);
  const [reconnectingId, setReconnectingId] = useState<string | null>(null);
  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+ /** Kesehatan sesi terpilih, dimuat dari endpoint antiban yang sudah ada. */
+ const [selectedHealth, setSelectedHealth] = useState<HealthStatus | null>(null);
 
  // Modal konfirmasi pengganti confirm()
  const [confirmModal, setConfirmModal] = useState<{
@@ -194,6 +198,27 @@ export const SessionsPage: React.FC = () => {
  stopPolling();
  };
  }, [stopPolling]);
+
+ // Muat kesehatan sesi terpilih dari endpoint antiban yang sudah ada.
+ // Field `health` ditambahkan ke response itu, jadi tidak perlu endpoint baru.
+ // Gagal memuat bukan error fatal — panel akan menampilkan pesan "belum tersedia".
+ useEffect(() => {
+   if (!selectedSession?.id) {
+     setSelectedHealth(null);
+     return;
+   }
+   let cancelled = false;
+   apiGetAntiBan(selectedSession.id)
+     .then((res: any) => {
+       if (!cancelled) setSelectedHealth(res?.health ?? null);
+     })
+     .catch(() => {
+       if (!cancelled) setSelectedHealth(null);
+     });
+   return () => {
+     cancelled = true;
+   };
+ }, [selectedSession?.id]);
 
  // ACTION: Putuskan untuk scan ulang (Logout credential lama + langsung buka modal QR baru)
  const handleDisconnectAndRescan = (session: Session) => {
@@ -497,6 +522,16 @@ export const SessionsPage: React.FC = () => {
  </div>
  </div>
 
+ {/* Kesehatan sesi: skor risiko ban dari HealthMonitor backend.
+     Dihitung dari disconnect, error 403, timelock 463, dan pesan gagal. */}
+ <div className="mt-2">
+ <div className="flex items-center justify-between gap-2 mb-1">
+ <span className="text-ink-faint text-[10px]">Kesehatan Sesi</span>
+ <RiskBadge risk={scoreToRisk(s.riskScore || 0)} score={s.riskScore || 0} compact showScore />
+ </div>
+ <RiskBar score={s.riskScore || 0} risk={scoreToRisk(s.riskScore || 0)} />
+ </div>
+
  <div className="mt-2 flex items-center justify-between text-[10px]">
  <span className="text-ink-faint">Profil Nomor:</span>
  <button
@@ -629,6 +664,15 @@ export const SessionsPage: React.FC = () => {
  <div className="text-xl font-bold font-mono text-pine">{selectedSession.deliveryRate}%</div>
  <div className="text-[10px] text-ink-faint">Berdasarkan event ACK server</div>
  </div>
+ </div>
+
+ {/* Panel kesehatan sesi: alasan risiko + rekomendasi tindakan dari
+     HealthMonitor backend. Dimuat dari endpoint antiban yang sudah ada. */}
+ <div>
+ <div className="text-[11px] text-ink-muted uppercase font-semibold mb-2">
+ Kesehatan Sesi &amp; Risiko Ban
+ </div>
+ <RiskDetail health={selectedHealth} />
  </div>
  </div>
  )}
