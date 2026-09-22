@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Smartphone, Lock, Check, Copy, AlertCircle, RefreshCw, KeyRound, ExternalLink, ShieldCheck, Sparkles, RotateCcw } from 'lucide-react';
-import { apiSetBlastPin, apiGetBlastLaunchUrl, apiRegenerateBlastLaunchUrl } from '../api';
+import { apiSetBlastPin, apiGetBlastLaunchUrl, apiRegenerateBlastLaunchUrl, apiGetSettings } from '../api';
 
 interface BlastAccessModalProps {
   isOpen?: boolean;
@@ -26,6 +26,14 @@ export const BlastAccessModal: React.FC<BlastAccessModalProps> = ({
   const [pinSuccess, setPinSuccess] = useState<string | null>(null);
 
   const [launchUrl, setLaunchUrl] = useState<string | null>(null);
+  /**
+   * Host dashboard blast, diambil dari `blast_dashboard_url` di Settings —
+   * bukan konstanta di kode. Sebelumnya nilai ini di-hardcode, sehingga panel
+   * menampilkan host yang salah begitu operator mengganti URL di Settings.
+   * Prioritas: host dari launchUrl (sumber paling akurat, karena backend yang
+   * menyusunnya), fallback ke pengaturan.
+   */
+  const [blastHost, setBlastHost] = useState<string | null>(null);
   const [isLoadingLaunch, setIsLoadingLaunch] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
@@ -43,6 +51,43 @@ export const BlastAccessModal: React.FC<BlastAccessModalProps> = ({
       loadLaunchLink();
     }
   }, [isOpen, hasPin]);
+
+  /**
+   * Isi host yang ditampilkan di footer. Diambil dari `blast_dashboard_url`
+   * di Settings supaya tidak lagi hardcode — kalau operator memindahkan
+   * dashboard ke domain lain, footer ikut berubah.
+   *
+   * Kalau pengaturan gagal diambil, fallback ke host dari launchUrl (yang
+   * disusun backend dari pengaturan yang sama).
+   */
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiGetSettings();
+        const configured: string | undefined = res?.settings?.blastDashboardUrl;
+        if (!cancelled && configured) {
+          setBlastHost(configured.replace(/^https?:\/\//, '').replace(/\/$/, ''));
+        }
+      } catch {
+        // Pengaturan hanya informasi tambahan; jangan ganggu modal.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen]);
+
+  // launchUrl adalah sumber paling akurat (backend menyusunnya dari pengaturan
+  // yang sama), jadi ia menimpa nilai dari /settings bila berbeda.
+  useEffect(() => {
+    if (!launchUrl) return;
+    try {
+      const u = new URL(launchUrl);
+      setBlastHost(u.host);
+    } catch {
+      // URL tidak valid — biarkan nilai sebelumnya.
+    }
+  }, [launchUrl]);
 
   const handleSavePin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -337,7 +382,12 @@ export const BlastAccessModal: React.FC<BlastAccessModalProps> = ({
         <div className="pt-2 border-t border-line flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-xs text-ink-muted">
             <KeyRound className="w-3.5 h-3.5 text-sea" />
-            <span>Host: <code className="text-ink font-mono">172.30.30.229:8085</code></span>
+            <span>
+              Host:{' '}
+              <code className="text-ink font-mono">
+                {blastHost ?? 'memuat...'}
+              </code>
+            </span>
           </div>
           
           <button
