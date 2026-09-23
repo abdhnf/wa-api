@@ -32,6 +32,19 @@ interface ActiveSession {
   qrData?: string | null;
   qrTimer?: ReturnType<typeof setTimeout>;
   lastSeenAt: number;
+  /**
+   * Menandai socket ini dibuat oleh startPairing (scan ulang), bukan restore.
+   *
+   * Saat scan ulang, creds lama sengaja DIPERTAHANKAN di disk (kalau user batal,
+   * sesi lama masih bisa restore). Akibatnya Baileys menganggap dirinya masih
+   * terautentikasi dan TIDAK PERNAH memancarkan QR — koneksi langsung 'open'
+   * dengan identitas lama, jadi user tidak pernah bisa mengganti nomor.
+   *
+   * Kalau flag ini true dan koneksi berhasil 'open', creds dianggap tidak sah
+   * untuk keperluan pairing: socket diputus dan creds dihapus supaya Baileys
+   * membuat socket baru yang memancarkan QR.
+   */
+  pairing?: boolean;
 }
 
 export class BaileysEngine {
@@ -150,6 +163,12 @@ export class BaileysEngine {
     socket.ev.on('connection.update', async (u) => {
       const s = this.active.get(sessionId);
 
+      // Abaikan event dari socket yang sudah DIGANTIKAN (mis. saat pairing
+      // membuang creds lama lalu membuat socket baru). Tanpa penjagaan ini,
+      // event 'close' dari socket lama akan menghapus sesi yang baru saja
+      // dibuat, sehingga QR tidak pernah bisa diambil.
+      if (s && s.socket !== socket) return;
+
       // Tangkap update reachout timelock dari server WA (error 463 / restriction updates)
       if ((u as any).reachoutTimeLock) {
         const rtl = (u as any).reachoutTimeLock;
@@ -166,6 +185,11 @@ export class BaileysEngine {
           const qrDataUrl = await QRCode.toDataURL(u.qr);
           if (s) {
             s.qrData = qrDataUrl;
+            // QR sudah terbit => socket ini memang TIDAK terautentikasi, jadi
+            // mode pairing selesai di sini. Kalau flag ini tidak dimatikan,
+            // 'open' setelah user scan akan disalahartikan sebagai "konek pakai
+            // creds lama" -> creds baru dihapus dan QR terbit lagi tanpa henti.
+            s.pairing = false;
             if (s.qrResolve) {
               s.qrResolve(qrDataUrl);
               s.qrResolve = undefined;
@@ -177,6 +201,37 @@ export class BaileysEngine {
       }
       if (!s) return;
       if (u.connection === 'open') {
+        // Sesi ini sedang scan ulang (pairing). Kalau socket berhasil 'open',
+        // berarti ia terautentikasi memakai creds LAMA — Baileys tidak akan
+        // pernah memancarkan QR dan user tidak bisa mengganti nomor. Creds lama
+        // sengaja dipertahankan oleh startPairing (supaya sesi lama bisa restore
+        // kalau user batal), jadi di sini harus dibuang eksplisit.
+        //
+        // Socket DIGANTI pada objek sesi yang sama, bukan dihapus lalu dibuat
+        // ulang: promise QR milik startPairing harus tetap hidup, kalau tidak
+        // request HTTP-nya menggantung sampai timeout tanpa pernah dapat QR.
+        if (s.pairing) {
+          console.log(`[BaileysEngine] ${sessionId}: pairing terkoneksi dengan creds lama — buang creds & minta QR baru.`);
+          try { s.socket.end(undefined); } catch {}
+          try {
+            const authDir = join(SESSIONS_DIR, sessionId);
+            if (existsSync(authDir)) {
+              const { rmSync } = await import('node:fs');
+              rmSync(authDir, { recursive: true, force: true });
+            }
+          } catch (e) {
+            console.error(`[BaileysEngine] Gagal hapus creds saat pairing ${sessionId}:`, e);
+          }
+          try {
+            s.socket = await this.createSocket(sessionId);
+            if (s.qrTimer) clearTimeout(s.qrTimer);
+            s.qrTimer = setTimeout(() => { s.qrResolve?.(null); }, 60_000);
+          } catch (e) {
+            console.error(`[BaileysEngine] Gagal membuat socket pairing ${sessionId}:`, e);
+            s.qrResolve?.(null);
+          }
+          return;
+        }
         s.info.status = 'connected';
         s.info.phone = this.normalizePhone(socket.user?.id || s.info.phone);
         s.info.metrics.disconnectCountToday = 0;
@@ -360,8 +415,24 @@ export class BaileysEngine {
           buf = Buffer.from(b64, 'base64');
           mime = msg.mediaMimeType || 'application/octet-stream';
         } else {
-          const res = await fetch(msg.mediaUrl!);
+          // Timeout wajib: tanpa ini, URL yang menggantung menahan antrean
+          // selamanya karena fetch tidak punya batas waktu bawaan.
+          const res = await fetch(msg.mediaUrl!, { signal: AbortSignal.timeout(30000) });
+          if (!res.ok) {
+            throw new Error(`Gagal mengunduh media: HTTP ${res.status} ${res.statusText} dari ${msg.mediaUrl}`);
+          }
+          // Halaman error (HTML/JSON) BUKAN berkas media. Tanpa pemeriksaan ini,
+          // body HTML ikut terkirim ke WhatsApp sebagai "gambar", ditolak di sisi
+          // WhatsApp, dan pesan tercatat 'sent' tanpa error apa pun — kegagalan
+          // senyap yang sulit dilacak. Lebih baik gagal di sini dengan pesan jelas.
+          const ct = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+          if (ct === 'text/html' || ct === 'application/json') {
+            throw new Error(`URL media mengembalikan ${ct}, bukan berkas media (HTTP ${res.status}): ${msg.mediaUrl}`);
+          }
           buf = Buffer.from(await res.arrayBuffer());
+          if (buf.length === 0) {
+            throw new Error(`Media kosong (0 byte) dari ${msg.mediaUrl}`);
+          }
           mime = res.headers.get('content-type') || 'application/octet-stream';
 
           if (!fileName) {
@@ -465,9 +536,13 @@ export class BaileysEngine {
     // Jika scan ulang, putuskan socket lama TAPI jangan hapus creds auth.
     // Hapus folder auth HANYA saat user eksplisit logout/delete via endpoint,
     // supaya session yang masih connected tidak hilang permanen.
+    //
+    // PENTING: socket lama TIDAK boleh di-logout di sini. logout() memberi tahu
+    // WhatsApp untuk memutus perangkat, sehingga scan ulang yang cuma berniat
+    // menyegarkan sesi justru membatalkan sesi lama di sisi WhatsApp. Cukup
+    // end() socket lokalnya — creds tetap sah kalau user batal scan.
     const existing = this.active.get(sessionId);
     if (existing) {
-      try { await existing.socket.logout(); } catch {}
       try { existing.socket.end(undefined); } catch {}
       this.active.delete(sessionId);
     }
@@ -486,15 +561,21 @@ export class BaileysEngine {
       info: this.infoFor(sessionId),
       lastSeenAt: Date.now(),
       qrResolve: qrResolveFn,
+      // Tandai sebagai sesi pairing: kalau socket ini ternyata 'open' memakai
+      // creds lama (berarti QR tidak akan pernah muncul), handler connection
+      // akan membuang creds dan membuat socket baru supaya QR keluar.
+      pairing: true,
     };
     activeSession.info.name = name || activeSession.info.name;
     activeSession.info.phone = phone || activeSession.info.phone;
     activeSession.info.status = 'connecting';
+    // Beri waktu lebih dari 60s: satu putaran pairing bisa memerlukan
+    // handshake + (kalau creds lama) buang creds + socket baru + QR.
     activeSession.qrTimer = setTimeout(() => {
       if (activeSession.qrResolve) {
         activeSession.qrResolve(null);
       }
-    }, 60_000);
+    }, 120_000);
 
     this.active.set(sessionId, activeSession);
 
