@@ -33,7 +33,7 @@ function buatSesi(credsLamaAda) {
 }
 
 // Handler 'connection.update' versi perbaikan
-function onConnectionUpdate(s, socketDariEvent, u, buatSocketBaru) {
+function onConnectionUpdate(s, socketDariEvent, u, buatSocketBaru, maxAttempts = 3) {
   // Penjagaan socket basi
   if (s && s.socket !== socketDariEvent) return 'diabaikan: socket basi';
 
@@ -57,6 +57,22 @@ function onConnectionUpdate(s, socketDariEvent, u, buatSocketBaru) {
     return 'connected';
   }
   if (u.connection === 'close') {
+    const loggedOut = u.kode === 401;
+    if (s.pairing && loggedOut) {
+      s.pairingAttempts = (s.pairingAttempts ?? 0) + 1;
+      if (s.pairingAttempts > maxAttempts) {
+        s.pairing = false; s.qrResolve?.(null); s.qrSelesai = 'menyerah';
+        return 'menyerah setelah batas';
+      }
+      s.socket = buatSocketBaru();
+      s.credsDiDisk = false;
+      s.credsDihapus++;
+      return 'creds dibuang, socket diganti';
+    }
+    if (s.pairing) {
+      s.pairing = false; s.qrResolve?.(null); s.qrSelesai = 'gagal';
+      return 'pairing gagal (bukan 401)';
+    }
     return 'close diproses';
   }
   return 'lainnya';
@@ -120,6 +136,44 @@ console.log('\n=== SKENARIO 5: bukan mode pairing -> tidak ada perubahan perilak
   const r = onConnectionUpdate(s, s.socket, { connection: 'open' }, () => ({ id: 'x' }));
   cek('sesi normal tetap connected', r, 'connected');
   cek('creds tidak disentuh', s.credsDihapus, 0);
+}
+
+console.log('\n=== SKENARIO 6: creds ditolak WhatsApp (401) -> buang creds, QR terbit ===');
+{
+  const s = buatSesi(true);
+  s.pairing = true;
+  // WhatsApp menutup socket karena creds lama sudah dibatalkan (401)
+  const r1 = onConnectionUpdate(s, s.socket, { connection: 'close', kode: 401 }, () => ({ id: 'socket-baru', alive: true }));
+  cek('creds dibuang & socket diganti', r1, 'creds dibuang, socket diganti');
+  cek('creds dihapus dari disk', s.credsDiDisk, false);
+  // Socket baru memancarkan QR
+  const r2 = onConnectionUpdate(s, s.socket, { qr: 'raw' }, () => s.socket);
+  cek('QR terbit setelah creds dibuang', r2, 'QR terbit');
+}
+
+console.log('\n=== SKENARIO 7: 401 berulang -> MENYERAH, tidak menggantung ===');
+{
+  const s = buatSesi(true);
+  s.pairing = true;
+  let r;
+  for (let i = 0; i < 3; i++) {
+    r = onConnectionUpdate(s, s.socket, { connection: 'close', kode: 401 }, () => ({ id: `socket-${i}`, alive: true }));
+  }
+  cek('3 percobaan masih mencoba', r, 'creds dibuang, socket diganti');
+  // Percobaan ke-4 harus menyerah
+  const r4 = onConnectionUpdate(s, s.socket, { connection: 'close', kode: 401 }, () => ({ id: 'socket-4', alive: true }));
+  cek('percobaan ke-4 menyerah', r4, 'menyerah setelah batas');
+  cek('promise QR diselesaikan (tidak menggantung)', s.qrSelesai, 'menyerah');
+  cek('mode pairing dimatikan', s.pairing, false);
+}
+
+console.log('\n=== SKENARIO 8: close bukan 401 saat pairing -> lapor, jangan gantung ===');
+{
+  const s = buatSesi(true);
+  s.pairing = true;
+  const r = onConnectionUpdate(s, s.socket, { connection: 'close', kode: 500 }, () => ({ id: 'x' }));
+  cek('pairing gagal dengan jelas', r, 'pairing gagal (bukan 401)');
+  cek('promise QR diselesaikan', s.qrSelesai, 'gagal');
 }
 
 console.log(`\n===== HASIL: ${pass} PASS / ${fail} FAIL =====`);

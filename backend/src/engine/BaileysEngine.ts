@@ -45,7 +45,15 @@ interface ActiveSession {
    * membuat socket baru yang memancarkan QR.
    */
   pairing?: boolean;
+  /**
+   * Berapa kali socket pairing sudah dibuat ulang. Dibatasi agar creds yang
+   * ditolak WhatsApp berulang kali tidak memicu pembuatan socket tanpa henti.
+   */
+  pairingAttempts?: number;
 }
+
+/** Batas pembuatan ulang socket saat pairing sebelum menyerah dan melapor. */
+const MAX_PAIRING_ATTEMPTS = 3;
 
 export class BaileysEngine {
   private active = new Map<string, ActiveSession>();
@@ -262,6 +270,62 @@ export class BaileysEngine {
       } else if (u.connection === 'close') {
         const code = (u.lastDisconnect?.error as any)?.output?.statusCode;
         const reason = code === DisconnectReason.loggedOut ? 'logged_out' : 'disconnected';
+
+        // Saat scan ulang, socket pairing sering ditutup WhatsApp SEBELUM sempat
+        // memancarkan QR — biasanya 401 (loggedOut) karena creds lama sudah
+        // dibatalkan dari sisi WhatsApp. Sebelum ini, sesi langsung dihapus dari
+        // this.active dan promise QR startPairing tidak pernah diselesaikan,
+        // sehingga request POST /pair menggantung sampai timeout 120s lalu gagal
+        // tanpa penjelasan — persis gejala "endpoint pair seolah tidak ada".
+        //
+        // Perbaikan: selama mode pairing, creds lama dibuang lalu socket dibuat
+        // ulang tanpa creds, sehingga Baileys memancarkan QR. Dibatasi
+        // MAX_PAIRING_ATTEMPTS agar tidak menjadi loop tanpa henti.
+        if (s.pairing && reason === 'logged_out') {
+          s.pairingAttempts = (s.pairingAttempts ?? 0) + 1;
+          if (s.pairingAttempts > MAX_PAIRING_ATTEMPTS) {
+            console.error(`[BaileysEngine] ${sessionId}: pairing gagal setelah ${MAX_PAIRING_ATTEMPTS} percobaan.`);
+            s.pairing = false;
+            this.active.delete(sessionId);
+            if (s.qrTimer) clearTimeout(s.qrTimer);
+            s.qrResolve?.(null);
+            return;
+          }
+          console.log(`[BaileysEngine] ${sessionId}: creds lama ditolak WhatsApp (401) saat pairing — buang creds & minta QR (percobaan ${s.pairingAttempts}).`);
+          try { s.socket.end(undefined); } catch {}
+          try {
+            const authDir = join(SESSIONS_DIR, sessionId);
+            if (existsSync(authDir)) {
+              const { rmSync } = await import('node:fs');
+              rmSync(authDir, { recursive: true, force: true });
+            }
+          } catch (e) {
+            console.error(`[BaileysEngine] Gagal hapus creds saat pairing ${sessionId}:`, e);
+          }
+          try {
+            s.socket = await this.createSocket(sessionId);
+            if (s.qrTimer) clearTimeout(s.qrTimer);
+            s.qrTimer = setTimeout(() => { s.qrResolve?.(null); }, 60_000);
+          } catch (e) {
+            console.error(`[BaileysEngine] Gagal membuat socket pairing ${sessionId}:`, e);
+            s.pairing = false;
+            this.active.delete(sessionId);
+            s.qrResolve?.(null);
+          }
+          return;
+        }
+
+        // Pairing gagal karena sebab lain: hentikan menunggu dan laporkan,
+        // jangan biarkan request menggantung sampai timeout.
+        if (s.pairing) {
+          console.error(`[BaileysEngine] ${sessionId}: socket pairing tertutup (${reason}) sebelum QR terbit.`);
+          s.pairing = false;
+          this.active.delete(sessionId);
+          if (s.qrTimer) clearTimeout(s.qrTimer);
+          s.qrResolve?.(null);
+          return;
+        }
+
         s.info.status = reason === 'logged_out' ? 'disconnected' : 'connecting';
         s.info.metrics.disconnectCountToday += 1;
         upsertSession(s.info);
