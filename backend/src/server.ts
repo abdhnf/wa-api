@@ -1240,6 +1240,37 @@ const MEDIA_EXT_BY_MIME: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
 };
 
+// Peta ekstensi -> MIME untuk SAAT MELAYANI berkas.
+//
+// Kenapa terpisah dari MEDIA_EXT_BY_MIME: satu MIME bisa punya beberapa ekstensi
+// (.jpg dan .jpeg). Peta balik dari MEDIA_EXT_BY_MIME hanya mengenali ekstensi
+// yang tertulis di sana, sehingga .jpeg jatuh ke application/octet-stream.
+// Baileys meneruskan mimetype apa adanya ke WhatsApp, dan WhatsApp menolak
+// gambar ber-mimetype octet-stream: pesan tercatat 'sent' tapi tidak pernah
+// sampai ke penerima — kegagalan senyap tanpa error di log.
+const MEDIA_MIME_BY_EXT: Record<string, string> = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.jpe': 'image/jpeg',
+  '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif',
+  '.pdf': 'application/pdf',
+  '.mp4': 'video/mp4', '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4', '.webm': 'audio/webm',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
+
+// Tentukan MIME saat berkas dilayani. Metadata unggahan (sidecar .json) adalah
+// sumber paling akurat karena mencatat tipe yang dikirim klien saat upload;
+// ekstensi dipakai sebagai cadangan.
+export function resolveMediaMime(ext: string, declaredMime?: string): string {
+  const clean = (declaredMime || '').split(';')[0].trim().toLowerCase();
+  if (clean && clean !== 'application/octet-stream' && /^[a-z]+\/[a-z0-9.+-]+$/.test(clean)) {
+    return clean;
+  }
+  return MEDIA_MIME_BY_EXT[ext.toLowerCase()] || clean || 'application/octet-stream';
+}
+
 const MEDIA_ID_PATTERN = /^[a-f0-9]{16,32}\.[a-z0-9]{2,5}$/i;
 
 function resolveMediaExtension(fileName: string, mimeType: string): string {
@@ -1332,20 +1363,28 @@ app.get('/api/v1/media/:id', async (req, reply) => {
     const info = await stat(filePath);
     if (!info.isFile()) throw new Error('bukan berkas');
     const ext = extname(id).toLowerCase();
-    const mime = Object.entries(MEDIA_EXT_BY_MIME).find(([, e]) => e === ext)?.[0] || 'application/octet-stream';
+
+    // Baca metadata unggahan lebih dulu: di sana tersimpan mimeType asli dari
+    // klien. Ini yang membuat .jpeg tidak lagi jatuh ke application/octet-stream.
+    let declaredMime = '';
+    let originalName = '';
+    try {
+      const metaRaw = await readFile(join(MEDIA_DIR, `${id}.json`), 'utf-8');
+      const meta = JSON.parse(metaRaw);
+      declaredMime = meta?.mimeType || '';
+      originalName = meta?.originalName || '';
+    } catch {}
+
+    const mime = resolveMediaMime(ext, declaredMime);
     reply.header('Content-Type', mime);
     reply.header('Content-Length', String(info.size));
     reply.header('Cache-Control', 'private, max-age=3600');
 
     // Jika ada metadata nama asli, kirim header Content-Disposition
-    try {
-      const metaRaw = await readFile(join(MEDIA_DIR, `${id}.json`), 'utf-8');
-      const meta = JSON.parse(metaRaw);
-      if (meta?.originalName) {
-        const encoded = encodeURIComponent(meta.originalName);
-        reply.header('Content-Disposition', `inline; filename="${meta.originalName.replace(/"/g, '')}"; filename*=UTF-8''${encoded}`);
-      }
-    } catch {}
+    if (originalName) {
+      const encoded = encodeURIComponent(originalName);
+      reply.header('Content-Disposition', `inline; filename="${originalName.replace(/"/g, '')}"; filename*=UTF-8''${encoded}`);
+    }
 
     return reply.send(createReadStream(filePath));
   } catch {

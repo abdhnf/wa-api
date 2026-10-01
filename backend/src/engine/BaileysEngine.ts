@@ -25,6 +25,58 @@ import { upsertSession, listSessions, updateMessageStatus, updateMessageWaId, ge
 const SESSIONS_DIR = new URL('../../data/auth/', import.meta.url).pathname;
 mkdirSync(SESSIONS_DIR, { recursive: true });
 
+// MIME yang informatif untuk WhatsApp. Kalau server mengirim tipe generik
+// (application/octet-stream), gambar akan ditolak di sisi penerima sementara
+// pesan tetap tercatat 'sent' — kegagalan senyap tanpa error di log.
+const GENERIC_MIMES = new Set(['application/octet-stream', 'binary/octet-stream', '']);
+
+const MIME_BY_EXT: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', jpe: 'image/jpeg',
+  png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+  pdf: 'application/pdf',
+  mp4: 'video/mp4', mov: 'video/quicktime',
+  mp3: 'audio/mpeg', ogg: 'audio/ogg', m4a: 'audio/mp4', webm: 'audio/webm',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
+
+/** Kenali tipe berkas dari magic bytes — jaring pengaman terakhir. */
+function sniffMime(buf: Buffer): string | null {
+  if (buf.length < 4) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif';
+  if (buf.length >= 12 && buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  if (buf.subarray(0, 5).toString('ascii') === '%PDF-') return 'application/pdf';
+  return null;
+}
+
+/**
+ * Tentukan mimetype yang dikirim ke WhatsApp.
+ *
+ * Urutan: header server (kalau spesifik) -> ekstensi nama berkas -> ekstensi URL
+ * -> magic bytes -> octet-stream. Dipakai bersama oleh jalur mediaUrl; jalur
+ * base64 memakai mediaMimeType dari pemanggil.
+ */
+export function resolveOutboundMime(
+  rawMime: string,
+  url: string | undefined,
+  fileName: string | undefined,
+  buf: Buffer,
+): string {
+  const clean = (rawMime || '').split(';')[0].trim().toLowerCase();
+  if (clean && !GENERIC_MIMES.has(clean)) return clean;
+
+  const candidates = [fileName, url ? url.split('?')[0] : ''];
+  for (const c of candidates) {
+    const ext = (c || '').split('.').pop()?.toLowerCase() || '';
+    if (MIME_BY_EXT[ext]) return MIME_BY_EXT[ext];
+  }
+  return sniffMime(buf) || clean || 'application/octet-stream';
+}
+
 interface ActiveSession {
   socket: WASocket;
   info: SessionInfo;
@@ -497,7 +549,13 @@ export class BaileysEngine {
           if (buf.length === 0) {
             throw new Error(`Media kosong (0 byte) dari ${msg.mediaUrl}`);
           }
-          mime = res.headers.get('content-type') || 'application/octet-stream';
+          // MIME dari server bisa tidak informatif (application/octet-stream).
+          // Baileys meneruskan mimetype apa adanya ke WhatsApp; gambar dengan
+          // mimetype octet-stream ditolak di sisi penerima sementara pesan tetap
+          // tercatat 'sent' — kegagalan senyap. Kalau server tidak menyebut tipe
+          // yang jelas, tebak dari ekstensi URL, lalu dari magic bytes berkas.
+          const rawMime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+          mime = resolveOutboundMime(rawMime, msg.mediaUrl, fileName, buf);
 
           if (!fileName) {
             // Coba ambil nama file dari header Content-Disposition bila ada
