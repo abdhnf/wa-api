@@ -13,7 +13,7 @@ import { hashPassword, verifyPassword, generateApiKey, rateLimitHook, checkLogin
 import {
   getUserByEmail, getUserById, listUsers, createUser,
   upsertWebhook, listWebhooks, listMessages, listMessagesPaged, updateUser, deleteUser, setUserPassword, setUserApiKey,
-  setUserBlastPin, clearUserBlastPin, createBlastLaunchToken, verifyAndBurnBlastLaunchToken,
+  setUserBlastPin, clearUserBlastPin, getUserBlastAccessToken, createBlastLaunchToken, verifyAndBurnBlastLaunchToken,
   getOrCreateUserBlastAccessToken, rotateUserBlastAccessToken, getUserByBlastAccessToken,
   getMessageById, db,
   getSetting, getAllSettings, setSettings, getAllUserSettings, setUserSettings, upsertGoogleUser, checkAndIncrementWeeklyQuota, checkAndIncrementQuota, refundQuota, getUserLogs, insertApiLog, listApiLogs, deleteApiLogs, clearApiLogs,
@@ -506,11 +506,11 @@ app.post('/api/v1/auth/register', async (req, reply) => {
 // ============ Users ============
 app.get('/api/v1/users', { preHandler: requireAdmin }, async () => {
   // Jangan kirim hash/token ke klien. blastPinHash & blastAccessToken cukup
-  // diwakili boolean hasBlastPin supaya panel bisa menampilkan status PIN.
+  // diwakili boolean hasBlastPin / hasBlastToken supaya panel bisa menampilkan status.
   return {
     users: listUsers().map((u) => {
       const { passwordHash, blastPinHash, blastAccessToken, ...rest } = u as any;
-      return { ...rest, hasBlastPin: !!blastPinHash };
+      return { ...rest, hasBlastPin: !!blastPinHash, hasBlastToken: !!blastAccessToken };
     }),
   };
 });
@@ -609,6 +609,38 @@ app.post('/api/v1/users/:id/reset-pin', { preHandler: requireAdmin }, async (req
 
   setUserBlastPin(id, hashPassword(raw));
   return { success: true, mode: 'set', hasBlastPin: true };
+});
+
+// Lihat link akses Blast Dashboard milik user lain (READ-ONLY, khusus admin).
+//
+// Sengaja hanya GET dan sengaja memakai getUserBlastAccessToken() — bukan
+// getOrCreateUserBlastAccessToken(). Endpoint ini untuk MELIHAT, bukan menerbitkan:
+// kalau user belum punya token, balasannya hasToken:false, bukan token baru.
+// Menerbitkan token untuk akun orang lain lewat jalur "lihat" akan memperluas
+// akses tanpa persetujuan pemilik akun.
+app.get('/api/v1/users/:id/blast-link', { preHandler: requireAdmin }, async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const target = getUserById(id);
+  if (!target) return reply.code(404).send({ error: 'User tidak ditemukan' });
+
+  const token = getUserBlastAccessToken(id);
+  if (!token) {
+    return {
+      success: true,
+      hasToken: false,
+      hasBlastPin: !!target.blastPinHash,
+      launchUrl: null,
+      message: 'User ini belum pernah membuat link akses. Link akan dibuat saat pemiliknya membuka menu Blast App di panel.',
+    };
+  }
+
+  const base = (getSetting('blast_dashboard_url') || 'http://172.30.30.229:8085').replace(/\/$/, '');
+  return {
+    success: true,
+    hasToken: true,
+    hasBlastPin: !!target.blastPinHash,
+    launchUrl: `${base}/auth/launch?token=${token}`,
+  };
 });
 
 // ============ Sessions ============

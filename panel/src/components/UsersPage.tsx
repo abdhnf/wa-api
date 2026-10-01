@@ -23,6 +23,10 @@ import {
  Eye,
  Lock,
  KeyRound,
+ Link2,
+ Copy,
+ Check,
+ ExternalLink,
  X,
  ChevronRight,
  Send,
@@ -36,6 +40,7 @@ import {
  apiRotateApiKey,
  apiResetPassword,
  apiResetPin,
+ apiGetUserBlastLink,
  apiGetUserLogs,
  getStoredUser
 } from '../api';
@@ -59,6 +64,7 @@ interface UserItem {
  authProvider?: 'local' | 'google';
  avatarUrl?: string;
  hasBlastPin?: boolean;
+ hasBlastToken?: boolean;
  }
 
 interface UserLogsData {
@@ -82,6 +88,7 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  const [showEditModal, setShowEditModal] = useState(false);
  const [showResetModal, setShowResetModal] = useState(false);
  const [showResetPinModal, setShowResetPinModal] = useState(false);
+ const [showBlastLinkModal, setShowBlastLinkModal] = useState(false);
  const [showLogsModal, setShowLogsModal] = useState(false);
  const [selectedUser, setSelectedUser] = useState<UserItem | null>(null);
 
@@ -130,6 +137,8 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
 
  const [newPassword, setNewPassword] = useState('');
  const [newPin, setNewPin] = useState('');
+ const [blastLink, setBlastLink] = useState<{ loading: boolean; url: string | null; hasToken: boolean; message?: string; error?: string }>({ loading: false, url: null, hasToken: false });
+ const [blastLinkCopied, setBlastLinkCopied] = useState(false);
  const currentUser = getStoredUser();
 
  const notify = (msg: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -256,6 +265,31 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  } catch (err: any) {
  notify(err.message || 'Gagal mereset PIN', 'error');
  }
+ };
+
+ const handleViewBlastLink = async (u: UserItem) => {
+ setSelectedUser(u);
+ setBlastLink({ loading: true, url: null, hasToken: false });
+ setBlastLinkCopied(false);
+ setShowBlastLinkModal(true);
+ try {
+ const res = await apiGetUserBlastLink(u.id);
+ setBlastLink({
+ loading: false,
+ url: res?.launchUrl ?? null,
+ hasToken: !!res?.hasToken,
+ message: res?.message,
+ });
+ } catch (err: any) {
+ setBlastLink({ loading: false, url: null, hasToken: false, error: err.message || 'Gagal mengambil link akses' });
+ }
+ };
+
+ const handleCopyBlastLink = () => {
+ if (!blastLink.url) return;
+ navigator.clipboard.writeText(blastLink.url);
+ setBlastLinkCopied(true);
+ setTimeout(() => setBlastLinkCopied(false), 2000);
  };
 
  const handleRotateKey = (u: UserItem) => {
@@ -625,6 +659,18 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  </button>
  )}
 
+ <button
+ onClick={() => handleViewBlastLink(u)}
+ title={u.hasBlastToken ? 'Lihat link akses Blast Dashboard' : 'Link Blast belum dibuat'}
+ className={`p-1.5 text-xs rounded-md transition-colors ${
+ u.hasBlastToken
+ ? 'text-sea hover:text-sea-deep hover:bg-sea-soft/10'
+ : 'text-ink-muted hover:text-ink-soft hover:bg-surface-alt'
+ }`}
+ >
+ <Link2 size={13} />
+ </button>
+
  {u.id !== currentUser?.id && (
  <button
  onClick={() => handleDeleteUser(u)}
@@ -861,6 +907,98 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  </button>
  </div>
  </form>
+ </div>
+ </div>
+ )}
+
+ {/* MODAL: LIHAT LINK AKSES BLAST DASHBOARD (read-only) */}
+ {showBlastLinkModal && selectedUser && (
+ <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-ink/75 backdrop-blur-xs animate-in fade-in duration-150">
+ <div className="bg-surface border border-line rounded-md w-full max-w-lg p-5 space-y-4">
+ <div className="flex items-center justify-between border-b border-line pb-3">
+ <h3 className="text-base font-bold text-ink flex items-center gap-2">
+ <Link2 size={16} className="text-sea" />
+ <span>Link Akses Blast Dashboard</span>
+ </h3>
+ <button onClick={() => setShowBlastLinkModal(false)} className="text-ink-muted hover:text-ink-soft">
+ <X size={18} />
+ </button>
+ </div>
+
+ <p className="text-xs text-ink-muted">
+ Link akses milik <b className="text-ink-soft">{selectedUser.name}</b> ({selectedUser.email}).
+ Tampilan ini hanya untuk membaca — link tidak dibuat ulang di sini.
+ </p>
+
+ {blastLink.loading ? (
+ <div className="p-4 bg-surface-sunken border border-line rounded-md flex items-center justify-center gap-2 text-xs text-ink-muted">
+ <RefreshCw size={16} className="animate-spin text-sea" />
+ <span>Memuat link akses...</span>
+ </div>
+ ) : blastLink.error ? (
+ <div className="p-3 bg-clay-wash/40 border border-clay-line/50 rounded-md text-xs text-clay-deep flex items-center gap-2">
+ <AlertCircle size={14} className="shrink-0" />
+ <span>{blastLink.error}</span>
+ </div>
+ ) : blastLink.hasToken && blastLink.url ? (
+ <div className="space-y-3">
+ <div className="flex items-center gap-2 p-2 bg-surface-sunken border border-line rounded-md">
+ <div className="flex-1 px-2.5 font-mono text-xs text-ink truncate select-all">
+ {blastLink.url}
+ </div>
+ <button
+ onClick={handleCopyBlastLink}
+ className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition shrink-0 ${
+ blastLinkCopied ? 'bg-pine text-surface' : 'bg-surface-alt hover:bg-surface-alt text-ink'
+ }`}
+ >
+ {blastLinkCopied ? <Check size={13} /> : <Copy size={13} />}
+ <span>{blastLinkCopied ? 'Tersalin' : 'Salin'}</span>
+ </button>
+ </div>
+
+ <a
+ href={blastLink.url}
+ target="_blank"
+ rel="noopener noreferrer"
+ className="w-full py-2.5 bg-sea hover:bg-sea-soft text-surface font-bold rounded-md text-xs transition flex items-center justify-center gap-2"
+ >
+ <span>Buka Blast Dashboard</span>
+ <ExternalLink size={14} />
+ </a>
+
+ <p className="text-[11px] text-ink-muted leading-relaxed">
+ Membuka link ini tetap meminta <b className="text-ink-soft">PIN 6 digit</b> milik pengguna.
+ Kalau PIN-nya lupa, reset lewat tombol PIN di baris pengguna.
+ </p>
+ </div>
+ ) : (
+ <div className="p-4 bg-honey-wash/30 border border-honey-line/40 rounded-md space-y-2">
+ <div className="flex items-start gap-2.5">
+ <AlertCircle size={16} className="text-honey shrink-0 mt-0.5" />
+ <div>
+ <h4 className="text-xs font-bold text-honey-deep">Link belum pernah dibuat</h4>
+ <p className="text-[11px] text-honey-deep/80 mt-0.5">
+ {blastLink.message || 'Pengguna ini belum membuka menu Blast App, jadi token aksesnya belum terbit.'}
+ </p>
+ </div>
+ </div>
+ <p className="text-[11px] text-ink-muted pt-1">
+ Token <b>tidak dibuat otomatis</b> dari halaman ini. Minta pengguna membuka panel, klik
+ <b className="text-ink-soft"> Blast App</b> di kanan atas, lalu salin link dari sana.
+ {!selectedUser.hasBlastPin && ' PIN-nya juga belum dipasang.'}
+ </p>
+ </div>
+ )}
+
+ <div className="flex items-center justify-end pt-2 border-t border-line">
+ <button
+ onClick={() => setShowBlastLinkModal(false)}
+ className="px-4 py-2 text-xs font-semibold text-ink-muted hover:text-ink-soft bg-surface-alt rounded-lg transition-colors"
+ >
+ Tutup
+ </button>
+ </div>
  </div>
  </div>
  )}

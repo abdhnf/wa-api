@@ -220,6 +220,14 @@ export async function apiResetPin(id: string, pin: string) {
   });
 }
 
+/**
+ * Lihat link akses Blast Dashboard milik user lain (admin, READ-ONLY).
+ * Tidak menerbitkan token baru — kalau user belum punya, hasToken=false.
+ */
+export async function apiGetUserBlastLink(id: string) {
+  return request(`/users/${id}/blast-link`);
+}
+
 export async function apiRotateApiKey(userId?: string) {
   const id = userId || getStoredUser()?.id;
   return request(`/users/${id}/rotate-key`, {

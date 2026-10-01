@@ -325,6 +325,21 @@ export function rotateUserBlastAccessToken(userId: string): string {
   return token;
 }
 
+/**
+ * Baca token akses blast TANPA membuatnya (read-only).
+ *
+ * Jangan pakai getOrCreateUserBlastAccessToken() untuk keperluan tampil/inspeksi:
+ * fungsi itu MENULIS token baru kalau belum ada. Endpoint admin yang hanya ingin
+ * MENAMPILKAN link user lain tidak boleh diam-diam menerbitkan token — itu
+ * memperluas akses tanpa persetujuan pemilik akun.
+ *
+ * Balas null kalau user belum punya token.
+ */
+export function getUserBlastAccessToken(userId: string): string | null {
+  const row = db.prepare('SELECT blast_access_token FROM users WHERE id = ?').get(userId) as any;
+  return row?.blast_access_token || null;
+}
+
 export function getUserByBlastAccessToken(token: string): UserRecord | null {
   if (!token) return null;
   const row = db.prepare('SELECT * FROM users WHERE blast_access_token = ?').get(token) as any;
