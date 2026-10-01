@@ -22,6 +22,7 @@ import {
  Globe,
  Eye,
  Lock,
+ KeyRound,
  X,
  ChevronRight,
  Send,
@@ -34,6 +35,7 @@ import {
  apiDeleteUser,
  apiRotateApiKey,
  apiResetPassword,
+ apiResetPin,
  apiGetUserLogs,
  getStoredUser
 } from '../api';
@@ -56,7 +58,8 @@ interface UserItem {
  assignedSessionId?: string;
  authProvider?: 'local' | 'google';
  avatarUrl?: string;
-}
+ hasBlastPin?: boolean;
+ }
 
 interface UserLogsData {
  user: UserItem;
@@ -78,6 +81,7 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  const [showCreateModal, setShowCreateModal] = useState(false);
  const [showEditModal, setShowEditModal] = useState(false);
  const [showResetModal, setShowResetModal] = useState(false);
+ const [showResetPinModal, setShowResetPinModal] = useState(false);
  const [showLogsModal, setShowLogsModal] = useState(false);
  const [selectedUser, setSelectedUser] = useState<UserItem | null>(null);
 
@@ -125,6 +129,7 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  });
 
  const [newPassword, setNewPassword] = useState('');
+ const [newPin, setNewPin] = useState('');
  const currentUser = getStoredUser();
 
  const notify = (msg: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -226,6 +231,30 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  setNewPassword('');
  } catch (err: any) {
  notify(err.message || 'Gagal mereset password', 'error');
+ }
+ };
+
+ const handleResetPinSubmit = async (e: React.FormEvent) => {
+ e.preventDefault();
+ if (!selectedUser) return;
+ const pin = newPin.trim();
+ if (pin && !/^\d{6}$/.test(pin)) {
+ notify('PIN wajib 6 digit angka', 'error');
+ return;
+ }
+ try {
+ await apiResetPin(selectedUser.id, pin);
+ notify(
+ pin
+ ? `PIN Blast untuk ${selectedUser.name} berhasil dipasang`
+ : `PIN Blast ${selectedUser.name} dihapus — user wajib memasang PIN baru saat membuka Blast`,
+ 'success'
+ );
+ setShowResetPinModal(false);
+ setNewPin('');
+ fetchUsers();
+ } catch (err: any) {
+ notify(err.message || 'Gagal mereset PIN', 'error');
  }
  };
 
@@ -578,6 +607,24 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  </button>
  )}
 
+ {u.role !== 'admin' && (
+ <button
+ onClick={() => {
+ setSelectedUser(u);
+ setNewPin('');
+ setShowResetPinModal(true);
+ }}
+ title={u.hasBlastPin ? 'Reset PIN Blast Dashboard' : 'Pasang PIN Blast Dashboard'}
+ className={`p-1.5 text-xs rounded-md transition-colors ${
+ u.hasBlastPin
+ ? 'text-honey hover:text-honey-deep hover:bg-honey/10'
+ : 'text-ink-soft hover:text-ink hover:bg-surface-alt'
+ }`}
+ >
+ <KeyRound size={13} />
+ </button>
+ )}
+
  {u.id !== currentUser?.id && (
  <button
  onClick={() => handleDeleteUser(u)}
@@ -749,6 +796,68 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  className="px-4 py-2 text-xs font-semibold text-surface bg-sea hover:bg-sea rounded-lg transition-colors"
  >
  Ganti Password
+ </button>
+ </div>
+ </form>
+ </div>
+ </div>
+ )}
+
+ {/* MODAL: RESET / PASANG PIN BLAST DASHBOARD */}
+ {showResetPinModal && selectedUser && (
+ <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-ink/75 backdrop-blur-xs animate-in fade-in duration-150">
+ <div className="bg-surface border border-line rounded-md w-full max-w-sm p-5 space-y-4">
+ <div className="flex items-center justify-between border-b border-line pb-3">
+ <h3 className="text-base font-bold text-ink flex items-center gap-2">
+ <KeyRound size={16} className="text-honey" />
+ <span>PIN Blast Dashboard</span>
+ </h3>
+ <button onClick={() => setShowResetPinModal(false)} className="text-ink-muted hover:text-ink-soft">
+ <X size={18} />
+ </button>
+ </div>
+
+ <p className="text-xs text-ink-muted">
+ PIN ini dipakai pengguna <b className="text-ink-soft">{selectedUser.name}</b> untuk membuka
+ WhatsApp Blast Dashboard. Status saat ini:{' '}
+ {selectedUser.hasBlastPin ? (
+ <b className="text-honey">sudah terpasang</b>
+ ) : (
+ <b className="text-ink-soft">belum ada</b>
+ )}
+ </p>
+
+ <form onSubmit={handleResetPinSubmit} className="space-y-4">
+ <div>
+ <input
+ type="text"
+ inputMode="numeric"
+ autoComplete="off"
+ maxLength={6}
+ placeholder="PIN baru — 6 digit angka"
+ value={newPin}
+ onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+ className="w-full bg-surface-sunken border border-line rounded-lg px-3 py-2 text-xs sm:text-sm text-ink tracking-[0.4em] text-center font-mono focus:outline-none focus:border-sea-line"
+ />
+ <p className="text-[11px] text-ink-muted mt-1.5">
+ Kosongkan lalu simpan untuk <b className="text-ink-soft">menghapus PIN</b> — pengguna akan
+ diminta memasang PIN baru sendiri saat membuka Blast Dashboard.
+ </p>
+ </div>
+
+ <div className="flex items-center justify-end gap-2 pt-1 border-t border-line">
+ <button
+ type="button"
+ onClick={() => setShowResetPinModal(false)}
+ className="px-3.5 py-2 text-xs font-semibold text-ink-muted hover:text-ink-soft bg-surface-alt rounded-lg transition-colors"
+ >
+ Batal
+ </button>
+ <button
+ type="submit"
+ className="px-4 py-2 text-xs font-semibold text-surface bg-honey hover:bg-honey-deep rounded-lg transition-colors"
+ >
+ {newPin.trim() ? 'Pasang PIN' : 'Hapus PIN'}
  </button>
  </div>
  </form>

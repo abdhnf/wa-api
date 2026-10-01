@@ -195,7 +195,9 @@ export async function verifyTurnstileToken(
   }
 }
 
-// Cleanup interval
+// Cleanup interval. .unref() penting: tanpa itu handle timer ini menahan event
+// loop, sehingga proses apa pun yang mengimpor modul ini (skrip CLI, test, seed)
+// tidak pernah keluar. Server sendiri tetap hidup karena socket listen-nya.
 setInterval(() => {
   const now = Date.now();
   for (const [ip, rec] of loginAttempts.entries()) {
@@ -208,4 +210,4 @@ setInterval(() => {
   for (const [ip, rec] of authWindows.entries()) {
     if (now > rec.resetAt) authWindows.delete(ip);
   }
-}, 10 * 60 * 1000);
+}, 10 * 60 * 1000).unref();

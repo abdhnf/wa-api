@@ -208,6 +208,18 @@ export async function apiResetPassword(id: string, password: string) {
   });
 }
 
+/**
+ * Reset PIN Blast Dashboard user (admin).
+ * - pin berisi 6 digit  -> pasang PIN baru
+ * - pin kosong          -> hapus PIN, user memasang sendiri saat membuka Blast
+ */
+export async function apiResetPin(id: string, pin: string) {
+  return request(`/users/${id}/reset-pin`, {
+    method: 'POST',
+    body: JSON.stringify({ pin }),
+  });
+}
+
 export async function apiRotateApiKey(userId?: string) {
   const id = userId || getStoredUser()?.id;
   return request(`/users/${id}/rotate-key`, {

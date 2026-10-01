@@ -13,7 +13,7 @@ import { hashPassword, verifyPassword, generateApiKey, rateLimitHook, checkLogin
 import {
   getUserByEmail, getUserById, listUsers, createUser,
   upsertWebhook, listWebhooks, listMessages, listMessagesPaged, updateUser, deleteUser, setUserPassword, setUserApiKey,
-  setUserBlastPin, createBlastLaunchToken, verifyAndBurnBlastLaunchToken,
+  setUserBlastPin, clearUserBlastPin, createBlastLaunchToken, verifyAndBurnBlastLaunchToken,
   getOrCreateUserBlastAccessToken, rotateUserBlastAccessToken, getUserByBlastAccessToken,
   getMessageById, db,
   getSetting, getAllSettings, setSettings, getAllUserSettings, setUserSettings, upsertGoogleUser, checkAndIncrementWeeklyQuota, checkAndIncrementQuota, refundQuota, getUserLogs, insertApiLog, listApiLogs, deleteApiLogs, clearApiLogs,
@@ -505,7 +505,14 @@ app.post('/api/v1/auth/register', async (req, reply) => {
 
 // ============ Users ============
 app.get('/api/v1/users', { preHandler: requireAdmin }, async () => {
-  return { users: listUsers().map((u) => ({ ...u, passwordHash: undefined })) };
+  // Jangan kirim hash/token ke klien. blastPinHash & blastAccessToken cukup
+  // diwakili boolean hasBlastPin supaya panel bisa menampilkan status PIN.
+  return {
+    users: listUsers().map((u) => {
+      const { passwordHash, blastPinHash, blastAccessToken, ...rest } = u as any;
+      return { ...rest, hasBlastPin: !!blastPinHash };
+    }),
+  };
 });
 
 app.post('/api/v1/users', { preHandler: requireAdmin }, async (req, reply) => {
@@ -577,6 +584,31 @@ app.post('/api/v1/users/:id/reset-password', { preHandler: requireAdmin }, async
   if (!getUserById(id)) return reply.code(404).send({ error: 'User tidak ditemukan' });
   setUserPassword(id, hashPassword(body.password));
   return { success: true };
+});
+
+// Reset PIN Blast Dashboard milik user. Dua mode:
+//  - body.pin berisi 6 digit  -> pasang PIN baru langsung (user tidak perlu setup ulang)
+//  - body.pin kosong/absen    -> hapus PIN, user wajib memasang sendiri saat membuka Blast
+app.post('/api/v1/users/:id/reset-pin', { preHandler: requireAdmin }, async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const body = (req.body || {}) as { pin?: string };
+  const target = getUserById(id);
+  if (!target) return reply.code(404).send({ error: 'User tidak ditemukan' });
+
+  const raw = typeof body.pin === 'string' ? body.pin.trim() : '';
+
+  if (!raw) {
+    clearUserBlastPin(id);
+    return { success: true, mode: 'cleared', hasBlastPin: false };
+  }
+
+  // Samakan aturan dengan endpoint /auth/blast-pin agar tidak ada jalur yang lebih longgar.
+  if (!/^\d{6}$/.test(raw)) {
+    return reply.code(400).send({ error: 'PIN wajib berupa 6 digit angka numerik.' });
+  }
+
+  setUserBlastPin(id, hashPassword(raw));
+  return { success: true, mode: 'set', hasBlastPin: true };
 });
 
 // ============ Sessions ============

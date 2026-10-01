@@ -297,6 +297,16 @@ export function setUserBlastPin(id: string, pinHash: string): boolean {
   return (res as any).changes > 0;
 }
 
+/**
+ * Hapus PIN Blast Dashboard milik user (admin-only via endpoint).
+ * Mengosongkan blast_pin_hash -> user wajib memasang PIN baru sebelum bisa
+ * membuka Blast Dashboard. Token akses blast tidak diubah di sini.
+ */
+export function clearUserBlastPin(id: string): boolean {
+  const res = db.prepare('UPDATE users SET blast_pin_hash = NULL WHERE id = ?').run(id);
+  return (res as any).changes > 0;
+}
+
 export function getOrCreateUserBlastAccessToken(userId: string): string {
   const user = getUserById(userId);
   if (user?.blastAccessToken) {
