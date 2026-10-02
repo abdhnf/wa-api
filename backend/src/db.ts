@@ -193,13 +193,22 @@ seedDefaultSettings();
 // ---------- Users ----------
 export function createUser(u: Omit<UserRecord, 'id' | 'usedToday' | 'usedThisWeek' | 'quotaPerWeek'> & { quotaPerWeek?: number; quotaLimit?: number; quotaPeriod?: 'daily' | 'weekly' | 'monthly' }): UserRecord {
   const id = `usr_${crypto.randomUUID().slice(0, 8)}`;
-  const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString();
   const quotaDay = u.quotaPerDay ?? 100;
   const quotaWeek = u.quotaPerWeek ?? (quotaDay * 7);
+
+  // Kuota periode ikut disimpan saat pembuatan. Sebelumnya kolom quota_limit /
+  // quota_period / quota_reset_at dibiarkan default ('weekly', 100, +7 hari),
+  // sehingga pilihan periode dari form tambah user hilang dan langsung tereset
+  // ke mingguan pada siklus pertama.
+  const period = u.quotaPeriod ?? 'weekly';
+  const durasi = period === 'daily' ? 86400000 : period === 'monthly' ? 30 * 86400000 : 7 * 86400000;
+  const limit = u.quotaLimit ?? (period === 'daily' ? quotaDay : period === 'monthly' ? quotaDay * 30 : quotaWeek);
+  const resetAt = new Date(Date.now() + durasi).toISOString();
+
   db.prepare(
-    `INSERT INTO users (id, name, email, password_hash, role, api_key, quota_per_day, quota_per_week, used_this_week, quota_reset_at, status, assigned_session_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
-  ).run(id, u.name, u.email, u.passwordHash, u.role, u.apiKey, quotaDay, quotaWeek, nextWeek, u.status, u.assignedSessionId ?? null);
+    `INSERT INTO users (id, name, email, password_hash, role, api_key, quota_per_day, quota_per_week, quota_limit, quota_period, used_this_week, used_in_period, quota_reset_at, status, assigned_session_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)`
+  ).run(id, u.name, u.email, u.passwordHash, u.role, u.apiKey, quotaDay, quotaWeek, limit, period, resetAt, u.status, u.assignedSessionId ?? null);
   return getUserById(id)!;
 }
 

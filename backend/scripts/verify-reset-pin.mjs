@@ -11,7 +11,7 @@
 //
 // Jalankan: node scripts/verify-reset-pin.mjs
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,15 +35,30 @@ function jalankan(script, env) {
   return new Promise((resolve, reject) => {
     const p = spawn(process.execPath, [script], { cwd: DIR, env: { ...process.env, ...env } });
     let out = '';
+    let err = '';
     p.stdout.on('data', (d) => (out += d));
-    p.stderr.on('data', (d) => (out += d));
-    p.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`${script} gagal:\n${out}`))));
+    // stderr SENGAJA dipisah, bukan digabung ke stdout. Node menulis
+    // ExperimentalWarning (node:sqlite) ke stderr; kalau digabung, baris
+    // "(Use `node --trace-warnings ...`)" jadi baris terakhir dan JSON.parse gagal.
+    p.stderr.on('data', (d) => (err += d));
+    p.on('close', (code) => (code === 0 ? resolve({ out, err }) : reject(new Error(`${script} gagal:\n${out}\n${err}`))));
   });
 }
 
+// Ambil baris JSON terakhir dari stdout, tanpa bergantung pada urutan baris lain.
+function ambilJson(teks) {
+  const baris = teks.split('\n').map((s) => s.trim()).filter((s) => s.startsWith('{') && s.endsWith('}'));
+  if (baris.length === 0) throw new Error(`tidak menemukan JSON di stdout:\n${teks}`);
+  return JSON.parse(baris[baris.length - 1]);
+}
+
 // 1. Seed DB
-const seedOut = await jalankan('scripts/_seed-reset-pin.mjs', { DATABASE_PATH: dbPath });
-const seed = JSON.parse(seedOut.trim().split('\n').pop());
+const { out: seedOut, err: seedErr } = await jalankan('scripts/_seed-reset-pin.mjs', { DATABASE_PATH: dbPath });
+const seed = ambilJson(seedOut);
+
+// Pastikan seed benar-benar menulis ke DB sementara, bukan DB produksi.
+if (!existsSync(dbPath)) throw new Error(`seed tidak membuat DB di ${dbPath} — DATABASE_PATH mungkin diabaikan`);
+if (seedErr.trim()) console.log(`(catatan stderr seed) ${seedErr.trim().split('\n')[0]}`);
 
 // 2. Jalankan server uji
 const server = spawn(process.execPath, ['dist/server.js'], {

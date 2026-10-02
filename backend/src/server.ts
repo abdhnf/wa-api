@@ -195,7 +195,11 @@ const createUserSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
   role: z.enum(['admin', 'subscription', 'user']).default('user'),
-  quotaPerDay: z.number().int().min(1).default(100),
+  // quotaPerDay tetap number ketat; panel mengirim angka. Tapi terima juga
+  // string numerik dari klien lain supaya tidak gagal validasi tanpa alasan.
+  quotaPerDay: z.coerce.number().int().min(1).default(100),
+  quotaPeriod: z.enum(['daily', 'weekly', 'monthly']).optional(),
+  quotaLimit: z.coerce.number().int().min(1).optional(),
   assignedSessionId: z.string().optional(),
 });
 
@@ -529,6 +533,8 @@ app.post('/api/v1/users', { preHandler: requireAdmin }, async (req, reply) => {
     role: data.role || 'user',
     apiKey: generateApiKey('wa'),
     quotaPerDay: data.quotaPerDay ?? 100,
+    quotaPeriod: data.quotaPeriod,
+    quotaLimit: data.quotaLimit,
     assignedSessionId: data.assignedSessionId,
     status: 'active',
   });
