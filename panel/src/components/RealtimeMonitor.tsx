@@ -121,7 +121,6 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
   const [queueLimit, setQueueLimit] = useState(10);
   const [queueTotal, setQueueTotal] = useState(0);
  const [sessions, setSessions] = useState<Session[]>(EMPTY_SESSIONS);
- const [isPaused, setIsPaused] = useState(false);
  const [selectedSessionId, setSelectedSessionId] = useState('');
  const [bulkRecipientText, setBulkRecipientText] = useState('');
  const [bulkMessageText, setBulkMessageText] = useState('Pemberitahuan resmi: Server telah selesai diupdate ✅');

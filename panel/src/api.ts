@@ -181,7 +181,16 @@ export async function apiGetUsers(): Promise<any[]> {
   return [];
 }
 
-export async function apiCreateUser(payload: { name: string; email: string; password: string; role: string; quotaPerDay: number; assignedSessionId?: string }) {
+export async function apiCreateUser(payload: {
+  name: string;
+  email: string;
+  password: string;
+  role: string;
+  quotaPerDay?: number;
+  quotaPeriod?: 'daily' | 'weekly' | 'monthly';
+  quotaLimit?: number;
+  assignedSessionId?: string;
+}) {
   return request('/users', {
     method: 'POST',
     body: JSON.stringify(payload),

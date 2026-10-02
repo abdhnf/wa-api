@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Smartphone, Lock, Check, Copy, AlertCircle, RefreshCw, KeyRound, ExternalLink, ShieldCheck, Sparkles, RotateCcw } from 'lucide-react';
+import { Smartphone, Lock, Check, Copy, AlertCircle, RefreshCw, KeyRound, ExternalLink, ShieldCheck, Sparkles, RotateCcw, CheckCircle2 } from 'lucide-react';
 import { apiSetBlastPin, apiGetBlastLaunchUrl, apiRegenerateBlastLaunchUrl, apiGetSettings } from '../api';
 
 interface BlastAccessModalProps {
@@ -43,6 +43,13 @@ export const BlastAccessModal: React.FC<BlastAccessModalProps> = ({
   useEffect(() => {
     if (isOpen && (userHasPin !== undefined || user?.hasBlastPin !== undefined)) {
       setHasPin(userHasPin ?? user?.hasBlastPin ?? false);
+    }
+    // Bersihkan pesan lama saat modal dibuka/ditutup supaya konfirmasi dari
+    // sesi sebelumnya tidak ikut tampil lagi.
+    if (!isOpen) {
+      setPinSuccess(null);
+      setPinError(null);
+      setRegenerateSuccess(null);
     }
   }, [isOpen, userHasPin, user?.hasBlastPin]);
 
@@ -286,6 +293,16 @@ export const BlastAccessModal: React.FC<BlastAccessModalProps> = ({
             >
               Ganti PIN
             </button>
+          </div>
+        )}
+
+        {/* Konfirmasi simpan PIN: ditampilkan di sini karena setelah berhasil
+            form langsung berganti menjadi kartu "PIN Keamanan Aktif", sehingga
+            pesan di dalam form tidak akan pernah sempat terlihat. */}
+        {pinSuccess && (
+          <div className="bg-pine-wash/40 border border-pine-line/50 rounded-md px-3.5 py-2.5 flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-pine shrink-0" />
+            <span className="text-xs text-pine-deep">{pinSuccess}</span>
           </div>
         )}
 

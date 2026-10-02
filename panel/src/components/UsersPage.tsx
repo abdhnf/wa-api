@@ -68,10 +68,27 @@ interface UserItem {
  }
 
 interface UserLogsData {
- user: UserItem;
- sessions: any[];
- messages: any[];
+  user: UserItem;
+  sessions: any[];
+  messages: any[];
 }
+
+// Format waktu ringkas untuk log (tanggal + jam, zona waktu pengguna).
+const fmtWaktu = (iso?: string) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+};
+
+const LABEL_STATUS_PESAN: Record<string, string> = {
+  queued: 'Menunggu',
+  sending: 'Dikirim',
+  sent: 'Terkirim',
+  delivered: 'Diterima',
+  read: 'Dibaca',
+  failed: 'Gagal',
+};
 
 interface UsersPageProps {
  onNotify?: (msg: string, type?: 'success' | 'error' | 'info') => void;
@@ -185,13 +202,15 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  return;
  }
  try {
- await apiCreateUser({
- name: createForm.name,
- email: createForm.email,
- password: createForm.password,
- role: createForm.role,
- quotaPerDay: 100,
- });
+   await apiCreateUser({
+     name: createForm.name,
+     email: createForm.email,
+     password: createForm.password,
+     role: createForm.role,
+     quotaPerDay: 100,
+     quotaPeriod: createForm.quotaPeriod,
+     quotaLimit: Number(createForm.quotaLimit),
+   });
  notify('Pengguna baru berhasil ditambahkan', 'success');
  setShowCreateModal(false);
  setCreateForm({
@@ -798,6 +817,128 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  </div>
  )}
 
+ {/* MODAL: TAMBAH USER */}
+ {showCreateModal && (
+   <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-ink/75 backdrop-blur-xs animate-in fade-in duration-150">
+     <div className="bg-surface border border-line rounded-md w-full max-w-md p-5 sm:p-6 space-y-4">
+       <div className="flex items-center justify-between border-b border-line pb-3">
+         <h3 className="text-base font-bold text-ink flex items-center gap-2">
+           <UserPlus size={16} className="text-sea" />
+           <span>Tambah Pengguna</span>
+         </h3>
+         <button onClick={() => setShowCreateModal(false)} className="text-ink-muted hover:text-ink-soft">
+           <X size={18} />
+         </button>
+       </div>
+
+       <form onSubmit={handleCreateSubmit} className="space-y-3.5">
+         <div>
+           <label className="block text-xs font-medium text-ink-muted mb-1">Nama</label>
+           <input
+             type="text"
+             required
+             value={createForm.name}
+             onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+             className="w-full bg-surface-sunken border border-line rounded-lg px-3 py-2 text-xs sm:text-sm text-ink focus:outline-none focus:border-sea-line"
+           />
+         </div>
+
+         <div>
+           <label className="block text-xs font-medium text-ink-muted mb-1">Email</label>
+           <input
+             type="email"
+             required
+             value={createForm.email}
+             onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
+             className="w-full bg-surface-sunken border border-line rounded-lg px-3 py-2 text-xs sm:text-sm text-ink focus:outline-none focus:border-sea-line"
+           />
+         </div>
+
+         <div>
+           <label className="block text-xs font-medium text-ink-muted mb-1">Password</label>
+           <input
+             type="password"
+             required
+             minLength={6}
+             placeholder="Minimal 6 karakter"
+             value={createForm.password}
+             onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
+             className="w-full bg-surface-sunken border border-line rounded-lg px-3 py-2 text-xs sm:text-sm text-ink focus:outline-none focus:border-sea-line"
+           />
+         </div>
+
+         <div>
+           <label className="block text-xs font-medium text-ink-muted mb-1">Role</label>
+           <select
+             value={createForm.role}
+             onChange={(e: any) => setCreateForm({ ...createForm, role: e.target.value })}
+             className="w-full bg-surface-sunken border border-line rounded-lg px-3 py-2 text-xs sm:text-sm text-ink-soft focus:outline-none focus:border-sea-line"
+           >
+             <option value="user">User Free</option>
+             <option value="subscription">Subscription (Custom Quota)</option>
+             <option value="admin">Super Admin</option>
+           </select>
+         </div>
+
+         {createForm.role !== 'admin' && (
+           <div className="bg-surface-sunken/60 p-3 rounded-md border border-line space-y-2.5">
+             <div className="flex items-center gap-1.5 text-xs text-sea font-semibold">
+               <Sliders size={13} />
+               <span>Pengaturan Batas Kuota Dinamis</span>
+             </div>
+
+             <div className="grid grid-cols-2 gap-2.5">
+               <div>
+                 <label className="block text-[11px] font-medium text-ink-muted mb-1">Siklus Periode</label>
+                 <select
+                   value={createForm.quotaPeriod}
+                   onChange={(e: any) => setCreateForm({ ...createForm, quotaPeriod: e.target.value })}
+                   className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-xs text-ink-soft focus:outline-none focus:border-sea-line"
+                 >
+                   <option value="daily">Harian (Daily)</option>
+                   <option value="weekly">Mingguan (Weekly)</option>
+                   <option value="monthly">Bulanan (Monthly)</option>
+                 </select>
+               </div>
+
+               <div>
+                 <label className="block text-[11px] font-medium text-ink-muted mb-1">Limit Pesan</label>
+                 <input
+                   type="number"
+                   min={1}
+                   value={createForm.quotaLimit}
+                   onChange={(e) => setCreateForm({ ...createForm, quotaLimit: Number(e.target.value) })}
+                   className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-xs text-ink focus:outline-none focus:border-sea-line"
+                 />
+               </div>
+             </div>
+
+             <p className="text-[11px] text-ink-muted">
+               Limit dihitung per siklus yang dipilih dan otomatis direset saat siklus berakhir.
+             </p>
+           </div>
+         )}
+
+         <div className="flex items-center justify-end gap-2 pt-1 border-t border-line">
+           <button
+             type="button"
+             onClick={() => setShowCreateModal(false)}
+             className="px-3.5 py-2 text-xs font-semibold text-ink-muted hover:text-ink-soft bg-surface-alt rounded-lg transition-colors"
+           >
+             Batal
+           </button>
+           <button
+             type="submit"
+             className="px-4 py-2 text-xs font-semibold text-surface bg-sea hover:bg-sea rounded-lg transition-colors"
+           >
+             Simpan
+           </button>
+         </div>
+       </form>
+     </div>
+   </div>
+ )}
+
  {/* MODAL: RESET PASSWORD */}
  {showResetModal && selectedUser && (
  <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-ink/75 backdrop-blur-xs animate-in fade-in duration-150">
@@ -1002,7 +1143,212 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  </div>
  </div>
  )}
- {/* Modal Dialog Konfirmasi Custom */}
+ {/* MODAL: LOG AKTIVITAS PENGGUNA */}
+{showLogsModal && selectedUser && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-ink/75 backdrop-blur-xs animate-in fade-in duration-150">
+    <div className="bg-surface border border-line rounded-md w-full max-w-3xl max-h-[88vh] flex flex-col">
+      <div className="flex items-center justify-between border-b border-line p-5 pb-3">
+        <h3 className="text-base font-bold text-ink flex items-center gap-2">
+          <FileText size={16} className="text-sea" />
+          <span>Log Aktivitas: {selectedUser.name}</span>
+        </h3>
+        <button onClick={() => setShowLogsModal(false)} className="text-ink-muted hover:text-ink-soft">
+          <X size={18} />
+        </button>
+      </div>
+
+      {/* Tab */}
+      <div className="flex items-center gap-1 px-5 pt-3 border-b border-line">
+        {([
+          ['messages', 'Pesan', MessageSquare],
+          ['sessions', 'Sesi', Smartphone],
+        ] as const).map(([key, label, Icon]) => (
+          <button
+            key={key}
+            onClick={() => setLogsTab(key)}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 transition-colors ${
+              logsTab === key
+                ? 'border-sea text-sea'
+                : 'border-transparent text-ink-muted hover:text-ink-soft'
+            }`}
+          >
+            <Icon size={13} />
+            <span>{label}</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-alt text-ink-muted">
+              {key === 'messages' ? logsData?.messages?.length ?? 0 : logsData?.sessions?.length ?? 0}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-5">
+        {logsLoading ? (
+          <p className="py-10 text-center text-xs text-ink-faint">Memuat log aktivitas...</p>
+        ) : !logsData ? (
+          <p className="py-10 text-center text-xs text-ink-faint">Tidak ada data.</p>
+        ) : logsTab === 'messages' ? (
+          logsData.messages.length === 0 ? (
+            <p className="py-10 text-center text-xs text-ink-faint">Belum ada pesan untuk pengguna ini.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-ink-soft min-w-[640px]">
+                <thead className="bg-surface-sunken/60 uppercase tracking-wider text-ink-muted border-b border-line font-semibold text-[11px]">
+                  <tr>
+                    <th className="py-2.5 px-3">Tujuan</th>
+                    <th className="py-2.5 px-3">Isi</th>
+                    <th className="py-2.5 px-3">Status</th>
+                    <th className="py-2.5 px-3">Waktu</th>
+                    <th className="py-2.5 px-3 text-right">Detail</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line/60">
+                  {logsData.messages.map((m: any) => (
+                    <tr key={m.id} className="hover:bg-surface-sunken/40">
+                      <td className="py-2.5 px-3 font-mono text-[11px]">{m.to}</td>
+                      <td className="py-2.5 px-3 max-w-[240px] truncate">
+                        {m.text || m.caption || (m.mediaType ? `[${m.mediaType}]` : '—')}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <span className="inline-flex items-center gap-1">
+                          {m.status === 'failed' ? (
+                            <XCircle size={12} className="text-clay" />
+                          ) : m.status === 'queued' ? (
+                            <Clock size={12} className="text-honey" />
+                          ) : (
+                            <CheckCircle2 size={12} className="text-sea" />
+                          )}
+                          {LABEL_STATUS_PESAN[m.status] || m.status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-ink-muted whitespace-nowrap">{fmtWaktu(m.timestamp)}</td>
+                      <td className="py-2.5 px-3 text-right">
+                        <button
+                          onClick={() => setSelectedMsg(m)}
+                          className="inline-flex items-center gap-1 text-sea hover:text-sea-deep"
+                        >
+                          <Eye size={12} />
+                          <span>Lihat</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : logsData.sessions.length === 0 ? (
+          <p className="py-10 text-center text-xs text-ink-faint">Belum ada sesi untuk pengguna ini.</p>
+        ) : (
+          <div className="space-y-2.5">
+            {logsData.sessions.map((s: any) => (
+              <div key={s.id} className="bg-surface-sunken/50 border border-line rounded-md p-3.5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-ink truncate">{s.name}</p>
+                    <p className="text-[11px] text-ink-muted font-mono">{s.phone || '—'}</p>
+                  </div>
+                  <span className={`text-[11px] px-2 py-0.5 rounded border ${
+                    s.status === 'connected'
+                      ? 'bg-sea-wash/60 text-sea border-sea-line'
+                      : 'bg-surface-alt text-ink-muted border-line'
+                  }`}>
+                    {s.status}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 text-[11px]">
+                  <div>
+                    <p className="text-ink-muted">Terkirim hari ini</p>
+                    <p className="text-ink font-semibold">{s.messagesSentToday ?? 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-ink-muted">Delivery rate</p>
+                    <p className="text-ink font-semibold">{s.deliveryRate ?? 0}%</p>
+                  </div>
+                  <div>
+                    <p className="text-ink-muted">Risk score</p>
+                    <p className="text-ink font-semibold">{s.riskScore ?? 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-ink-muted">Warmup hari</p>
+                    <p className="text-ink font-semibold">{s.warmupDay ?? 0}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-end p-5 pt-3 border-t border-line">
+        <button
+          onClick={() => setShowLogsModal(false)}
+          className="px-4 py-2 text-xs font-semibold text-ink-muted hover:text-ink-soft bg-surface-alt rounded-lg transition-colors"
+        >
+          Tutup
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* MODAL: DETAIL PESAN */}
+{selectedMsg && (
+  <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 bg-ink/80 backdrop-blur-sm animate-in fade-in duration-150">
+    <div className="bg-surface border border-line rounded-md w-full max-w-lg max-h-[85vh] flex flex-col">
+      <div className="flex items-center justify-between border-b border-line p-5 pb-3">
+        <h3 className="text-base font-bold text-ink flex items-center gap-2">
+          <MessageSquare size={16} className="text-sea" />
+          <span>Detail Pesan</span>
+        </h3>
+        <button onClick={() => setSelectedMsg(null)} className="text-ink-muted hover:text-ink-soft">
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-5 space-y-3">
+        {([
+          ['ID', selectedMsg.id],
+          ['Sesi', selectedMsg.sessionId],
+          ['Tujuan', selectedMsg.to],
+          ['Status', LABEL_STATUS_PESAN[selectedMsg.status] || selectedMsg.status],
+          ['Waktu', fmtWaktu(selectedMsg.timestamp)],
+          ['Prioritas', selectedMsg.priority || 'normal'],
+          ['ID pesan WhatsApp', selectedMsg.waMessageId],
+          ['Media', selectedMsg.mediaType ? `${selectedMsg.mediaType}${selectedMsg.mediaMimeType ? ` (${selectedMsg.mediaMimeType})` : ''}` : null],
+          ['Berkas', selectedMsg.fileName],
+          ['Detail error', selectedMsg.errorDetail],
+        ] as const).map(([label, value]) =>
+          value ? (
+            <div key={label} className="grid grid-cols-[130px_1fr] gap-3 text-xs">
+              <span className="text-ink-muted">{label}</span>
+              <span className="text-ink-soft break-all">{String(value)}</span>
+            </div>
+          ) : null
+        )}
+
+        {(selectedMsg.text || selectedMsg.caption) && (
+          <div className="pt-2 border-t border-line">
+            <p className="text-xs text-ink-muted mb-1.5">Isi pesan</p>
+            <p className="text-xs text-ink-soft whitespace-pre-wrap bg-surface-sunken border border-line rounded-md p-3">
+              {selectedMsg.text || selectedMsg.caption}
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-end p-5 pt-3 border-t border-line">
+        <button
+          onClick={() => setSelectedMsg(null)}
+          className="px-4 py-2 text-xs font-semibold text-ink-muted hover:text-ink-soft bg-surface-alt rounded-lg transition-colors"
+        >
+          Tutup
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* Modal Dialog Konfirmasi Custom */}
  {confirmModal.isOpen && (
  <div className="fixed inset-0 bg-ink/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
  <div className="bg-surface border border-line rounded-md max-w-md w-full p-6 space-y-4">

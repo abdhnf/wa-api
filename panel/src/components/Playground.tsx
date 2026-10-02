@@ -46,9 +46,6 @@ export const Playground: React.FC = () => {
  toastTimer.current = setTimeout(() => setToast(null), 3500);
  }, []);
  const [logs, setLogs] = useState<MessageLog[]>([]);
-  const [logPage, setLogPage] = useState(1);
-  const [logLimit] = useState(10);
-  const [logTotal, setLogTotal] = useState(0);
 
  // Form states
  const [priority, setPriority] = useState<'normal' | 'high'>('normal');
@@ -154,28 +151,36 @@ export const Playground: React.FC = () => {
 
  // Fetch message logs (realtime polling HANYA untuk riwayat pesan)
  const fetchLogs = async (silent = true, page: number = historyPage) => {
- const targetId = selectedSessionIdRef.current || selectedSession?.id;
- if (!targetId) return;
- if (!silent) setRefreshingLogs(true);
- try {
- const res = await apiGetSessionMessages(targetId);
- if (res && res.messages) {
- const mapped: MessageLog[] = res.messages.map((m: any) => ({
- id: m.id,
- recipient: m.to,
- mode: m.mode,
- status: m.status,
- delay: `${(m.jitterDelayMs / 1000).toFixed(1)}s`,
- timestamp: new Date(m.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
- detail: m.text || m.fileName || m.name || m.mode,
- }));
- setLogs(mapped);
- }
- } catch (e) {
- console.error('Gagal fetch logs', e);
- } finally {
- if (!silent) setRefreshingLogs(false);
- }
+   const targetId = selectedSessionIdRef.current || selectedSession?.id;
+   if (!targetId) return;
+   if (!silent) setRefreshingLogs(true);
+   try {
+     // Kirim limit/offset supaya paginasi benar-benar bekerja di server,
+     // dan baca `total` untuk mengisi penghitung halaman. Sebelumnya hanya
+     // 50 baris pertama yang diambil tanpa total, sehingga tombol
+     // Prev/Next membandingkan diri dengan angka yang selalu 0.
+     const res = await apiGetSessionMessages(targetId, {
+       limit: historyLimit,
+       offset: (page - 1) * historyLimit,
+     });
+     if (res && res.messages) {
+       const mapped: MessageLog[] = res.messages.map((m: any) => ({
+         id: m.id,
+         recipient: m.to,
+         mode: m.mode,
+         status: m.status,
+         delay: `${(m.jitterDelayMs / 1000).toFixed(1)}s`,
+         timestamp: new Date(m.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+         detail: m.text || m.fileName || m.name || m.mode,
+       }));
+       setLogs(mapped);
+       setHistoryTotal(Number(res.total) || 0);
+     }
+   } catch (e) {
+     console.error('Gagal fetch logs', e);
+   } finally {
+     if (!silent) setRefreshingLogs(false);
+   }
  };
 
  // Fetch session list HANYA sekali saat mount
