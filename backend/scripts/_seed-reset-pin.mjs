@@ -1,6 +1,35 @@
 // Seed DB sementara untuk uji endpoint reset-pin.
 // Dijalankan sebagai proses terpisah supaya koneksi SQLite-nya sudah tertutup
 // saat server uji dibuka (menghindari 'database is locked').
+//
+// WAJIB: DATABASE_PATH harus diarahkan ke DB sementara. Tanpa penjaga ini
+// skrip pernah dijalankan tanpa DATABASE_PATH dan menulis user uji ke DB
+// produksi (data/wa.db). Penjaga di bawah menolak jalan sebelum menyentuh DB.
+const dbPath = process.env.DATABASE_PATH;
+if (!dbPath) {
+  console.error(
+    '[seed-reset-pin] DITOLAK: DATABASE_PATH belum diisi.\n' +
+    '  Skrip ini menulis user uji dan TIDAK BOLEH menyentuh DB produksi.\n' +
+    '  Jalankan: DATABASE_PATH=/tmp/uji/wa.db node scripts/_seed-reset-pin.mjs'
+  );
+  process.exit(2);
+}
+if (!/tmp|temp|test|uji/i.test(dbPath)) {
+  console.error(
+    `[seed-reset-pin] DITOLAK: DATABASE_PATH menunjuk ke "${dbPath}" yang ` +
+    'tidak terlihat seperti DB sementara.\n' +
+    '  Arahkan ke path di bawah /tmp (mis. /tmp/uji/wa.db) lalu ulangi.'
+  );
+  process.exit(2);
+}
+
+// Semua output diagnostik ke stderr supaya stdout hanya berisi JSON hasil.
+// Parser skrip verifikasi membaca stdout sebagai JSON — warning apa pun yang
+// ikut ke stdout akan merusaknya.
+const log = (...a) => console.error('[seed-reset-pin]', ...a);
+
+log('menulis ke', dbPath);
+
 import { createUser, getOrCreateUserBlastAccessToken, db } from '../dist/db.js';
 import { hashPassword } from '../dist/security.js';
 
