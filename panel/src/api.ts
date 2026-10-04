@@ -448,6 +448,7 @@ export async function apiUpdateSettings(settings: {
   turnstileSecretKey?: string;
   googleAllowedDomains?: string;
   blastDashboardUrl?: string;
+  panelBaseUrl?: string;
 }) {
   return request('/settings', {
     method: 'PATCH',

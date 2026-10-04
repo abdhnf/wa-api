@@ -31,6 +31,7 @@ import {
   hitungPermintaanReset,
 } from './db.js';
 import { ambilKonfigurasiMail, kirimEmail } from './mailer.js';
+import { ambilBasisPanel } from './panel-url.js';
 import {
   bangunTautanReset,
   templateResetPassword,
@@ -179,8 +180,10 @@ export async function ajukanResetPassword(
     requestedIp: alamatIp,
   });
 
-  const basisUrl = process.env.PANEL_BASE_URL || 'http://172.30.30.229:5174';
-  const tautan = bangunTautanReset(basisUrl, token);
+  // Sumber yang sama dengan email selamat datang — lihat panel-url.ts.
+  // Sebelumnya baris ini membaca process.env sendiri, sehingga nilai dari tabel
+  // `settings` tidak berpengaruh dan tautan menunjuk alamat pengembangan.
+  const tautan = bangunTautanReset(ambilBasisPanel(), token);
 
   const hasilKirim = await kirimEmail({
     tujuan: email,

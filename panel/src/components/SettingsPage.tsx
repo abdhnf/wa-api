@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Shield, KeyRound, UserPlus, CheckCircle2, AlertCircle, Loader2, HelpCircle, Copy, Check } from 'lucide-react';
+import { Settings, Shield, KeyRound, UserPlus, CheckCircle2, AlertCircle, Loader2, HelpCircle, Copy, Check, Mail } from 'lucide-react';
 import { apiGetSettings, apiUpdateSettings } from '../api';
 import { MailSettingsCard } from './MailSettingsCard';
 
@@ -18,6 +18,7 @@ export const SettingsPage: React.FC = () => {
  const [turnstileSecretKey, setTurnstileSecretKey] = useState('');
  const [hasTurnstileSecret, setHasTurnstileSecret] = useState(false);
  const [blastDashboardUrl, setBlastDashboardUrl] = useState('http://172.30.30.229:8085');
+ const [panelBaseUrl, setPanelBaseUrl] = useState('');
  const [copiedVal, setCopiedVal] = useState<string | null>(null);
 
  const copyToClipboard = (text: string, id: string) => {
@@ -51,6 +52,7 @@ export const SettingsPage: React.FC = () => {
  if (res.settings.blastDashboardUrl) {
  setBlastDashboardUrl(res.settings.blastDashboardUrl);
  }
+ setPanelBaseUrl(res.settings.panelBaseUrl || '');
  }
  } catch (err: any) {
  showToast(err?.message || 'Gagal memuat pengaturan', 'error');
@@ -73,6 +75,7 @@ export const SettingsPage: React.FC = () => {
  turnstileSecretKey,
  googleAllowedDomains,
  blastDashboardUrl,
+ panelBaseUrl,
  });
  showToast('Pengaturan sistem berhasil disimpan!', 'success');
  loadSettings();
@@ -282,6 +285,37 @@ export const SettingsPage: React.FC = () => {
  />
  <p className='text-[11px] text-ink-faint'>
  Contoh: <code className='text-ink-muted font-mono'>http://172.30.30.229:8085</code> atau domain kustom Anda.
+ </p>
+ </div>
+ </div>
+
+ {/* Basis URL panel — dipakai menyusun tautan di email */}
+ <div className='bg-surface/60 border border-line rounded-md p-5 space-y-4'>
+ <div className='flex items-start gap-3'>
+ <div className='p-2.5 rounded-md bg-sea-wash/50 border border-sea-line/40 text-sea'>
+ <Mail size={20} />
+ </div>
+ <div>
+ <h3 className='text-sm font-semibold text-ink'>Alamat Panel untuk Tautan Email</h3>
+ <p className='text-xs text-ink-muted mt-0.5'>
+ Alamat yang dipakai menyusun tautan di email — reset password dan tombol pada email selamat datang.
+ Harus alamat yang bisa dibuka penerima dari perangkatnya, bukan alamat internal server.
+ </p>
+ </div>
+ </div>
+
+ <div className='space-y-1.5 pt-2 border-t border-line/60'>
+ <label className='block text-xs font-semibold text-ink-soft'>Basis URL Panel</label>
+ <input
+ type='url'
+ value={panelBaseUrl}
+ onChange={(e) => setPanelBaseUrl(e.target.value)}
+ placeholder='https://wa-api.uns.web.id'
+ className='w-full px-3.5 py-2.5 bg-surface-sunken/60 border border-line rounded-md text-xs font-mono text-ink focus:outline-none focus:border-sea-line transition'
+ />
+ <p className='text-[11px] text-ink-faint'>
+ Kosongkan untuk memakai nilai dari berkas konfigurasi server. Tanpa keduanya, email akan memakai alamat
+ pengembangan dan tautannya tidak bisa dibuka pengguna.
  </p>
  </div>
  </div>
