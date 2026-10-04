@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, Shield, KeyRound, UserPlus, CheckCircle2, AlertCircle, Loader2, HelpCircle, Copy, Check } from 'lucide-react';
 import { apiGetSettings, apiUpdateSettings } from '../api';
+import { MailSettingsCard } from './MailSettingsCard';
 
 export const SettingsPage: React.FC = () => {
  const [loading, setLoading] = useState(true);
@@ -347,6 +348,8 @@ export const SettingsPage: React.FC = () => {
  </div>
  )}
  </div>
+
+ <MailSettingsCard onNotify={showToast} />
 
  </form>
  </div>

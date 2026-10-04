@@ -104,6 +104,12 @@ export interface UserRecord {
   avatarUrl?: string;
   blastPinHash?: string;
   blastAccessToken?: string;
+  /**
+   * Nomor telepon dalam bentuk kanonik: digit saja, awalan 628.
+   * Opsional karena user lama belum punya nomor, dan unik parsial di DB —
+   * jadi nomor tidak boleh dipakai dua akun, tapi banyak user boleh kosong.
+   */
+  phone?: string;
 }
 
 export interface WebhookRecord {

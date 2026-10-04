@@ -30,8 +30,9 @@ import {
  X,
  ChevronRight,
  Send,
- Sliders
-} from 'lucide-react';
+ Sliders,
+ Phone
+ } from 'lucide-react';
 import {
  apiGetUsers,
  apiCreateUser,
@@ -65,6 +66,8 @@ interface UserItem {
  avatarUrl?: string;
  hasBlastPin?: boolean;
  hasBlastToken?: boolean;
+ /** Nomor telepon kanonik (628xxx). Opsional — user lama belum punya. */
+ phone?: string;
  }
 
 interface UserLogsData {
@@ -136,20 +139,22 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
 
  // Form State
  const [createForm, setCreateForm] = useState({
- name: '',
- email: '',
- password: '',
- role: 'user' as 'admin' | 'subscription' | 'user',
- quotaPeriod: 'weekly' as 'daily' | 'weekly' | 'monthly',
- quotaLimit: 100,
+   name: '',
+   email: '',
+   password: '',
+   phone: '',
+   role: 'user' as 'admin' | 'subscription' | 'user',
+   quotaPeriod: 'weekly' as 'daily' | 'weekly' | 'monthly',
+   quotaLimit: 100,
  });
 
  const [editForm, setEditForm] = useState({
- name: '',
- role: 'user' as 'admin' | 'subscription' | 'user',
- status: 'active' as 'active' | 'suspended',
- quotaPeriod: 'weekly' as 'daily' | 'weekly' | 'monthly',
- quotaLimit: 100,
+   name: '',
+   phone: '',
+   role: 'user' as 'admin' | 'subscription' | 'user',
+   status: 'active' as 'active' | 'suspended',
+   quotaPeriod: 'weekly' as 'daily' | 'weekly' | 'monthly',
+   quotaLimit: 100,
  });
 
  const [newPassword, setNewPassword] = useState('');
@@ -206,21 +211,23 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
      name: createForm.name,
      email: createForm.email,
      password: createForm.password,
+     phone: createForm.phone || undefined,
      role: createForm.role,
      quotaPerDay: 100,
      quotaPeriod: createForm.quotaPeriod,
      quotaLimit: Number(createForm.quotaLimit),
    });
- notify('Pengguna baru berhasil ditambahkan', 'success');
- setShowCreateModal(false);
- setCreateForm({
- name: '',
- email: '',
- password: '',
- role: 'user',
- quotaPeriod: 'weekly',
- quotaLimit: 100,
- });
+   notify('Pengguna baru berhasil ditambahkan', 'success');
+   setShowCreateModal(false);
+   setCreateForm({
+     name: '',
+     email: '',
+     password: '',
+     phone: '',
+     role: 'user',
+     quotaPeriod: 'weekly',
+     quotaLimit: 100,
+   });
  fetchUsers();
  } catch (err: any) {
  notify(err.message || 'Gagal menambahkan pengguna', 'error');
@@ -232,11 +239,12 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  if (!selectedUser) return;
  try {
  await apiUpdateUser(selectedUser.id, {
- name: editForm.name,
- role: editForm.role,
- status: editForm.status,
- quotaLimit: Number(editForm.quotaLimit),
- quotaPeriod: editForm.quotaPeriod,
+   name: editForm.name,
+   phone: editForm.phone,
+   role: editForm.role,
+   status: editForm.status,
+   quotaLimit: Number(editForm.quotaLimit),
+   quotaPeriod: editForm.quotaPeriod,
  });
  notify('Data pengguna berhasil diperbarui', 'success');
  setShowEditModal(false);
@@ -534,6 +542,12 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  )}
  </div>
  <p className="text-[11px] text-ink-muted">{u.email}</p>
+ {u.phone && (
+   <p className="text-[10px] text-ink-faint font-mono flex items-center gap-1">
+     <Phone size={9} />
+     {u.phone}
+   </p>
+ )}
  <p className="text-[10px] font-mono text-ink-faint">ID: {u.id}</p>
  </div>
  </div>
@@ -624,11 +638,12 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  onClick={() => {
  setSelectedUser(u);
  setEditForm({
- name: u.name,
- role: u.role,
- status: u.status,
- quotaPeriod: u.quotaPeriod || 'weekly',
- quotaLimit: u.quotaLimit ?? u.quotaPerWeek ?? 100,
+   name: u.name,
+   phone: u.phone || '',
+   role: u.role,
+   status: u.status,
+   quotaPeriod: u.quotaPeriod || 'weekly',
+   quotaLimit: u.quotaLimit ?? u.quotaPerWeek ?? 100,
  });
  setShowEditModal(true);
  }}
@@ -733,6 +748,22 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
  className="w-full bg-surface-sunken border border-line rounded-lg px-3 py-2 text-xs sm:text-sm text-ink focus:outline-none focus:border-sea-line"
  />
+ </div>
+
+ <div>
+ <label className="block text-xs font-medium text-ink-muted mb-1">
+ Nomor Telepon <span className="text-ink-faint font-normal">(opsional)</span>
+ </label>
+ <input
+ type="tel"
+ value={editForm.phone}
+ onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+ placeholder="08123456789"
+ className="w-full bg-surface-sunken border border-line rounded-lg px-3 py-2 text-xs sm:text-sm text-ink focus:outline-none focus:border-sea-line font-mono"
+ />
+ <p className="text-[10px] text-ink-faint mt-1">
+ Kosongkan untuk menghapus nomor.
+ </p>
  </div>
 
  <div className="grid grid-cols-2 gap-2.5">
@@ -865,6 +896,22 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
              onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
              className="w-full bg-surface-sunken border border-line rounded-lg px-3 py-2 text-xs sm:text-sm text-ink focus:outline-none focus:border-sea-line"
            />
+         </div>
+
+         <div>
+           <label className="block text-xs font-medium text-ink-muted mb-1">
+             Nomor Telepon <span className="text-ink-faint font-normal">(opsional)</span>
+           </label>
+           <input
+             type="tel"
+             value={createForm.phone}
+             onChange={(e) => setCreateForm({ ...createForm, phone: e.target.value })}
+             placeholder="08123456789"
+             className="w-full bg-surface-sunken border border-line rounded-lg px-3 py-2 text-xs sm:text-sm text-ink focus:outline-none focus:border-sea-line font-mono"
+           />
+           <p className="text-[10px] text-ink-faint mt-1">
+             Format 08xx, +62xxx, atau 62xxx. Disimpan seragam sebagai 628xxx.
+           </p>
          </div>
 
          <div>

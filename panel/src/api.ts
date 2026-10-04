@@ -90,10 +90,13 @@ export async function apiLogin(email: string, password: string, turnstileToken?:
   return res;
 }
 
-export async function apiRegister(name: string, email: string, password: string) {
+export async function apiRegister(name: string, email: string, password: string, phone?: string) {
   const res = await request('/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ name, email, password }),
+    // Nomor WhatsApp ikut dikirim bila diisi. Backend menormalkannya ke format
+    // 628... dan menolak nomor yang tidak valid, jadi nilainya tidak dibersihkan
+    // di sisi panel.
+    body: JSON.stringify({ name, email, password, ...(phone && phone.trim() ? { phone: phone.trim() } : {}) }),
   });
   if (res?.token) saveAuth(res.token, res.user);
   return res;
@@ -185,6 +188,7 @@ export async function apiCreateUser(payload: {
   name: string;
   email: string;
   password: string;
+  phone?: string;
   role: string;
   quotaPerDay?: number;
   quotaPeriod?: 'daily' | 'weekly' | 'monthly';
@@ -508,6 +512,26 @@ export async function apiGetMyProfile() {
   return data;
 }
 
+/**
+ * Lengkapi profil sendiri.
+ *
+ * Dipakai halaman onboarding setelah pendaftaran via Google, yang tidak punya
+ * formulir untuk mengisi nomor WhatsApp. Kirim `phone: ''` untuk menghapus nomor.
+ */
+export async function apiUpdateProfilSaya(patch: { name?: string; phone?: string }) {
+  const data = await request('/auth/me', {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  if (data?.user) {
+    // Simpan balik ke localStorage supaya status onboarding ikut segar tanpa
+    // perlu memanggil ulang /auth/me.
+    const existing = getStoredUser() || {};
+    localStorage.setItem('wa_user', JSON.stringify({ ...existing, ...data.user }));
+  }
+  return data;
+}
+
 export async function apiRotateMyKey() {
   const data = await request('/auth/rotate-key', { method: 'POST' });
   if (data && data.apiKey) {
@@ -539,5 +563,49 @@ export async function apiGetBlastLaunchUrl() {
 export async function apiRegenerateBlastLaunchUrl() {
   return await request('/auth/blast-launch/regenerate', {
     method: 'POST',
+  });
+}
+
+// ---------- Reset Password Mandiri ----------
+//
+// Ketiga fungsi ini dipakai halaman sebelum login, jadi TIDAK BOLEH
+// membutuhkan token. Endpoint-nya publik di sisi backend.
+
+export async function apiLupaPassword(email: string) {
+  return await request('/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+/** Periksa apakah token di tautan masih berlaku, tanpa memakainya. */
+export async function apiVerifikasiTokenReset(token: string) {
+  return await request(`/auth/reset-password/verify?token=${encodeURIComponent(token)}`);
+}
+
+export async function apiResetPasswordDenganToken(token: string, password: string) {
+  return await request('/auth/reset-password', {
+    method: 'POST',
+    body: JSON.stringify({ token, password }),
+  });
+}
+
+// ---------- Pengaturan Email (admin) ----------
+
+export async function apiSimpanKonfigurasiMail(patch: Record<string, unknown>) {
+  return await request('/settings/mail', {
+    method: 'PUT',
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function apiUjiKoneksiMail() {
+  return await request('/settings/mail/test', { method: 'POST' });
+}
+
+export async function apiKirimEmailUji(to: string) {
+  return await request('/settings/mail/send-test', {
+    method: 'POST',
+    body: JSON.stringify({ to }),
   });
 }

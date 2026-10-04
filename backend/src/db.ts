@@ -137,6 +137,10 @@ ensureColumn('messages', 'priority', "TEXT DEFAULT 'normal'");
 ensureColumn('sessions', 'health_state', 'TEXT');
 ensureColumn('users', 'blast_pin_hash', 'TEXT');
 ensureColumn('users', 'blast_access_token', 'TEXT');
+// Nomor telepon user. Kanonik: digit saja, awalan 628. Opsional supaya user lama
+// tidak rusak. Keunikannya dijaga index parsial di bawah, bukan NOT NULL UNIQUE,
+// karena banyak user boleh belum punya nomor.
+ensureColumn('users', 'phone', 'TEXT');
 
 // Production Indexes: Optimalkan query pencarian pesan, status antrean, dan receipt WA.
 //
@@ -153,6 +157,34 @@ CREATE INDEX IF NOT EXISTS idx_messages_wa_id ON messages (wa_message_id) WHERE 
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
 CREATE INDEX IF NOT EXISTS idx_api_logs_user_time ON api_logs (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs (created_at);
+`);
+
+// Index unik parsial untuk nomor telepon. WAJIB dijalankan setelah ensureColumn
+// di atas, karena kolomnya baru ditambahkan di situ.
+//
+// Kenapa parsial (WHERE phone IS NOT NULL): index unik biasa akan menganggap
+// semua NULL sebagai nilai yang sama, sehingga user kedua yang belum punya nomor
+// langsung ditolak. Dengan klausa WHERE, hanya nomor yang benar-benar terisi yang
+// dijaga keunikannya — banyak user boleh kosong, tapi satu nomor hanya satu akun.
+//
+// Tabel token reset password mengikuti pola blast_launch_tokens, dengan tambahan
+// kolom audit (used_at, destination, requested_ip) dan `channel` yang disiapkan
+// untuk OTP via WhatsApp nanti tanpa perlu migrasi ulang.
+db.exec(`
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users (phone) WHERE phone IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  token_hash   TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL,
+  channel      TEXT NOT NULL DEFAULT 'email',
+  destination  TEXT NOT NULL,
+  expires_at   TEXT NOT NULL,
+  used_at      TEXT,
+  requested_ip TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_prt_user ON password_reset_tokens (user_id);
+CREATE INDEX IF NOT EXISTS idx_prt_expires ON password_reset_tokens (expires_at);
 `);
 
 // Sinkronisasi data kuota existing
@@ -206,15 +238,21 @@ export function createUser(u: Omit<UserRecord, 'id' | 'usedToday' | 'usedThisWee
   const resetAt = new Date(Date.now() + durasi).toISOString();
 
   db.prepare(
-    `INSERT INTO users (id, name, email, password_hash, role, api_key, quota_per_day, quota_per_week, quota_limit, quota_period, used_this_week, used_in_period, quota_reset_at, status, assigned_session_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)`
-  ).run(id, u.name, u.email, u.passwordHash, u.role, u.apiKey, quotaDay, quotaWeek, limit, period, resetAt, u.status, u.assignedSessionId ?? null);
+    `INSERT INTO users (id, name, email, password_hash, role, api_key, quota_per_day, quota_per_week, quota_limit, quota_period, used_this_week, used_in_period, quota_reset_at, status, assigned_session_id, phone)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)`
+  ).run(id, u.name, u.email, u.passwordHash, u.role, u.apiKey, quotaDay, quotaWeek, limit, period, resetAt, u.status, u.assignedSessionId ?? null, u.phone ?? null);
   return getUserById(id)!;
 }
 
 export function getUserByEmail(email: string): UserRecord | null {
   const normalized = (email || '').trim().toLowerCase();
   const row = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(normalized) as any;
+  return row ? mapUser(row) : null;
+}
+
+/** Cari user dari nomor telepon kanonik (628xxx). */
+export function getUserByPhone(phone: string): UserRecord | null {
+  const row = db.prepare('SELECT * FROM users WHERE phone = ?').get(phone) as any;
   return row ? mapUser(row) : null;
 }
 
@@ -244,6 +282,7 @@ export function updateUser(
     quotaPeriod?: 'daily' | 'weekly' | 'monthly';
     status?: string;
     assignedSessionId?: string | null;
+    phone?: string | null;
   }
 ): UserRecord | null {
   const cur = getUserById(id);
@@ -268,7 +307,7 @@ export function updateUser(
   db.prepare(
     `UPDATE users SET
        name = ?, role = ?, quota_per_day = ?, quota_per_week = ?, quota_limit = ?, quota_period = ?,
-       used_in_period = ?, quota_reset_at = ?, status = ?, assigned_session_id = ?
+       used_in_period = ?, quota_reset_at = ?, status = ?, assigned_session_id = ?, phone = ?
      WHERE id = ?`
   ).run(
     patch.name ?? cur.name,
@@ -281,6 +320,8 @@ export function updateUser(
     resetAt ?? null,
     patch.status ?? cur.status,
     (patch.assignedSessionId === undefined ? cur.assignedSessionId : patch.assignedSessionId) ?? null,
+    // undefined = jangan sentuh; null/kosong = hapus nomor.
+    patch.phone === undefined ? (cur.phone ?? null) : (patch.phone || null),
     id
   );
   return getUserById(id);
@@ -294,6 +335,107 @@ export function deleteUser(id: string): boolean {
 export function setUserPassword(id: string, passwordHash: string): boolean {
   const res = db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, id);
   return (res as any).changes > 0;
+}
+
+// ---------- Reset Password ----------
+//
+// Token disimpan sebagai HASH SHA-256, bukan teks asli.
+//
+// KENAPA BUKAN hashPassword() dari security.ts: fungsi itu memakai scrypt dengan
+// salt acak per pemanggilan, sehingga hash-nya tidak deterministik — dua hash dari
+// token yang sama selalu berbeda. Akibatnya pencarian `WHERE token_hash = ?`
+// menjadi mustahil, karena tidak ada cara menebak salt-nya.
+//
+// Kenapa SHA-256 tetap aman di sini: token reset adalah nilai acak 32 byte, bukan
+// password buatan manusia yang bisa ditebak. Serangan brute-force tidak berlaku,
+// jadi hash cepat sudah cukup. Prinsipnya memang berbeda dari password, dan
+// pemisahan ini disengaja.
+
+export interface TokenResetRecord {
+  tokenHash: string;
+  userId: string;
+  channel: string;
+  destination: string;
+  expiresAt: string;
+  usedAt?: string;
+  requestedIp?: string;
+  createdAt: string;
+}
+
+function mapTokenReset(row: any): TokenResetRecord {
+  return {
+    tokenHash: row.token_hash,
+    userId: row.user_id,
+    channel: row.channel,
+    destination: row.destination,
+    expiresAt: row.expires_at,
+    usedAt: row.used_at || undefined,
+    requestedIp: row.requested_ip || undefined,
+    createdAt: row.created_at,
+  };
+}
+
+export function simpanTokenReset(t: {
+  tokenHash: string;
+  userId: string;
+  channel?: string;
+  destination: string;
+  expiresAt: string;
+  requestedIp?: string | null;
+}): void {
+  db.prepare(
+    `INSERT INTO password_reset_tokens (token_hash, user_id, channel, destination, expires_at, requested_ip)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(t.tokenHash, t.userId, t.channel || 'email', t.destination, t.expiresAt, t.requestedIp ?? null);
+}
+
+export function ambilTokenReset(tokenHash: string): TokenResetRecord | null {
+  const row = db.prepare('SELECT * FROM password_reset_tokens WHERE token_hash = ?').get(tokenHash) as any;
+  return row ? mapTokenReset(row) : null;
+}
+
+/**
+ * Tandai token terpakai.
+ *
+ * Syarat `used_at IS NULL` ada di klausa WHERE supaya dua permintaan yang datang
+ * hampir bersamaan tidak bisa sama-sama berhasil — hanya yang pertama mengubah
+ * baris. Ini yang membuat token benar-benar sekali pakai.
+ */
+export function tandaiTokenResetTerpakai(tokenHash: string): boolean {
+  const res = db
+    .prepare("UPDATE password_reset_tokens SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL")
+    .run(tokenHash);
+  return (res as any).changes > 0;
+}
+
+/** Batalkan semua token milik user. Dipakai setelah password berhasil diubah. */
+export function batalkanTokenResetUser(userId: string): number {
+  const res = db
+    .prepare("UPDATE password_reset_tokens SET used_at = datetime('now') WHERE user_id = ? AND used_at IS NULL")
+    .run(userId);
+  return (res as any).changes ?? 0;
+}
+
+/** Jumlah permintaan reset oleh satu email dalam rentang waktu tertentu. */
+export function hitungPermintaanReset(email: string, jendelaMenit: number): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM password_reset_tokens
+       WHERE destination = ? AND created_at >= datetime('now', ?)`
+    )
+    .get(
+      (email || '').trim().toLowerCase(),
+      `-${Math.max(1, Math.floor(jendelaMenit))} minutes`
+    ) as any;
+  return Number(row?.n ?? 0);
+}
+
+/** Hapus token kedaluwarsa. Dipanggil berkala supaya tabel tidak menumpuk. */
+export function bersihkanTokenResetKedaluwarsa(): number {
+  const res = db
+    .prepare("DELETE FROM password_reset_tokens WHERE expires_at < datetime('now') OR used_at IS NOT NULL")
+    .run();
+  return (res as any).changes ?? 0;
 }
 
 export function setUserApiKey(id: string, apiKey: string): boolean {
@@ -402,6 +544,7 @@ function mapUser(row: any): UserRecord {
     avatarUrl: row.avatar_url || undefined,
     blastPinHash: row.blast_pin_hash || undefined,
     blastAccessToken: row.blast_access_token || undefined,
+    phone: row.phone || undefined,
   };
 }
 
@@ -1083,7 +1226,7 @@ export function setUserSettings(userId: string, settings: Record<string, string>
 }
 
 // Upsert user dari Google OAuth
-export function upsertGoogleUser(data: { googleId: string; email: string; name: string; avatarUrl?: string }): UserRecord {
+export function upsertGoogleUser(data: { googleId: string; email: string; name: string; avatarUrl?: string }): { user: UserRecord; baru: boolean } {
   // Cek by googleId atau by email
   let existing = db.prepare('SELECT * FROM users WHERE google_id = ?').get(data.googleId) as any;
   if (!existing) {
@@ -1094,7 +1237,7 @@ export function upsertGoogleUser(data: { googleId: string; email: string; name: 
     // Hubungkan google_id jika sebelumnya daftar lokal
     db.prepare('UPDATE users SET google_id = ?, avatar_url = COALESCE(?, avatar_url), auth_provider = ? WHERE id = ?')
       .run(data.googleId, data.avatarUrl ?? null, 'google', existing.id);
-    return getUserById(existing.id)!;
+    return { user: getUserById(existing.id)!, baru: false };
   }
 
   // Buat user baru via Google
@@ -1108,7 +1251,7 @@ export function upsertGoogleUser(data: { googleId: string; email: string; name: 
      VALUES (?, ?, ?, ?, 'user', ?, 100, 700, 0, ?, 'active', ?, 'google', ?)`
   ).run(id, data.name, data.email, randomPass, apiKey, nextWeek, data.googleId, data.avatarUrl ?? null);
 
-  return getUserById(id)!;
+  return { user: getUserById(id)!, baru: true };
 }
 
 export function getLastSessionForRecipient(recipient: string): string | null {

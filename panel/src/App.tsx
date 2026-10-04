@@ -10,13 +10,15 @@ import { Docs } from './components/Docs';
 import { ApiLogsPage } from './components/ApiLogsPage';
 import { RealtimeMonitor } from './components/RealtimeMonitor';
 import { AuthPage } from './components/AuthPage';
+import { ResetPasswordPage } from './components/ResetPasswordPage';
+import { OnboardingPage } from './components/OnboardingPage';
 import { SessionsPage } from './components/SessionsPage';
 import { SettingsPage } from './components/SettingsPage';
 import { UsersPage } from './components/UsersPage';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { BlastAccessModal } from './components/BlastAccessModal';
 import { ThemeToggle } from './components/ThemeToggle';
-import { getStoredAuth, clearAuth, apiGetMyProfile, apiGetUsers, apiRotateApiKey } from './api';
+import { getStoredAuth, getStoredUser, clearAuth, apiGetMyProfile, apiGetUsers, apiRotateApiKey } from './api';
 import { type User, EMPTY_USERS } from './dummyData';
 
 const emptyForm = { name: '', email: '', password: '', role: 'user', quotaPerDay: 100, status: 'active', assignedSessionId: '' };
@@ -37,9 +39,50 @@ const adminNavItems: { id: TabId; label: string; desc: string; icon: React.Eleme
   { id: 'settings', label: 'System Settings', desc: 'Turnstile, Google OAuth, security', icon: Settings },
 ];
 
+/**
+ * Baca halaman yang diminta dari alamat URL.
+ *
+ * Diletakkan di luar komponen karena hanya membaca `window.location` — tidak ada
+ * state React yang dibutuhkan, dan dengan begitu bisa dipakai langsung sebagai
+ * nilai awal useState tanpa efek tambahan.
+ */
+function bacaRute(): { halaman: 'utama' | 'lupa-password' | 'reset-password' | 'onboarding'; token: string } {
+  const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/reset-password') {
+    const token = new URLSearchParams(window.location.search).get('token') || '';
+    return { halaman: 'reset-password', token };
+  }
+  if (path === '/lupa-password') return { halaman: 'lupa-password', token: '' };
+  if (path === '/onboarding') return { halaman: 'onboarding', token: '' };
+  return { halaman: 'utama', token: '' };
+}
+
 export const App: React.FC = () => {
   const [auth, setAuth] = useState(getStoredAuth());
   const [activeTab, setActiveTab] = useState<TabId>('playground');
+
+  // Rute halaman reset password.
+  //
+  // Panel ini tidak memakai react-router — navigasinya berbasis state tab. Untuk
+  // dua halaman yang harus bisa dibuka SEBELUM login, path URL dibaca langsung.
+  // Ini perlu karena tautan reset datang dari email dan membuka panel dari nol,
+  // jadi tidak ada state apa pun yang bisa diandalkan.
+  const [rute, setRute] = useState<{ halaman: 'utama' | 'lupa-password' | 'reset-password' | 'onboarding'; token: string }>(
+    () => bacaRute()
+  );
+
+  useEffect(() => {
+    const onPop = () => setRute(bacaRute());
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  const pindahRute = (halaman: 'utama' | 'lupa-password' | 'onboarding') => {
+    const path = halaman === 'utama' ? '/' : halaman === 'onboarding' ? '/onboarding' : '/lupa-password';
+    window.history.pushState({}, '', path);
+    setRute({ halaman, token: '' });
+  };
+
   const [users, setUsers] = useState<User[]>(EMPTY_USERS);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -144,11 +187,67 @@ export const App: React.FC = () => {
     setAuth({ token: null, user: null });
   };
 
+  // Halaman reset password bisa dibuka tanpa login — ini justru untuk pengguna
+  // yang tidak bisa masuk. Diletakkan SEBELUM pemeriksaan auth supaya tidak
+  // teralihkan ke form login.
+  if (rute.halaman === 'lupa-password') {
+    return (
+      <ResetPasswordPage
+        mode='minta'
+        onKembali={() => pindahRute('utama')}
+        onSelesai={() => pindahRute('utama')}
+      />
+    );
+  }
+
+  if (rute.halaman === 'reset-password') {
+    return (
+      <ResetPasswordPage
+        mode='atur'
+        token={rute.token}
+        onKembali={() => pindahRute('lupa-password')}
+        onSelesai={() => pindahRute('utama')}
+      />
+    );
+  }
+
+  // Halaman pengenalan setelah daftar via Google. Diletakkan sebelum gerbang
+  // login karena pengguna sudah punya token pada titik ini, dan halaman ini
+  // tidak boleh tertukar dengan dashboard.
+  if (rute.halaman === 'onboarding' && auth.token && auth.user) {
+    return (
+      <OnboardingPage
+        user={auth.user}
+        onSelesai={() => {
+          // Hapus penanda dari data yang SUDAH tersimpan, bukan dari objek state
+          // `auth.user`. State itu diambil saat halaman dibuka dan belum memuat
+          // nomor yang baru saja disimpan; menulisnya kembali akan mengembalikan
+          // `phone` ke nilai lama dan membuat panel menampilkan nomor kosong.
+          const tersimpan = getStoredUser() || {};
+          delete tersimpan.perluOnboarding;
+          try {
+            localStorage.setItem('wa_user', JSON.stringify(tersimpan));
+          } catch {}
+          setAuth(getStoredAuth());
+          pindahRute('utama');
+        }}
+      />
+    );
+  }
+
   if (!auth.token || !auth.user) {
     return (
       <AuthPage
-        onLoginSuccess={() => {
+        onLupaPassword={() => pindahRute('lupa-password')}
+        onLoginSuccess={(user) => {
           setAuth(getStoredAuth());
+          // Akun Google yang baru dibuat belum punya nomor WhatsApp. Arahkan ke
+          // halaman pengenalan supaya pengguna langsung melihat kuota dan bisa
+          // melengkapi nomornya.
+          if (user?.perluOnboarding) {
+            pindahRute('onboarding');
+            return;
+          }
           // Segarkan profil dari server setelah login. Response login tidak
           // memuat seluruh field akun, dan `apiGetMyProfile()` juga menulis
           // ulang `wa_user` di localStorage — tanpa ini modal Blast membaca

@@ -2,3 +2,5 @@ allowBuilds:
   '@whiskeysockets/baileys': true
   esbuild: false
   protobufjs: true
+minimumReleaseAgeExclude:
+  - nodemailer@10.0.14

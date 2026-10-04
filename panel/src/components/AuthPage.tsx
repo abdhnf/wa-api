@@ -1,16 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Lock, Mail, Shield, AlertCircle, ArrowRight, Loader2 } from 'lucide-react';
+import { Lock, Mail, Shield, AlertCircle, ArrowRight, Loader2, Phone } from 'lucide-react';
 import { apiLogin, apiRegister, apiGetAuthConfig, apiLoginGoogle } from '../api';
 
 interface AuthPageProps {
- onLoginSuccess: (user: { name: string; email: string }) => void;
+  /**
+   * Dipanggil setelah autentikasi berhasil. Objek user diteruskan utuh (bukan
+   * hanya nama dan email) karena App perlu membacanya untuk menentukan apakah
+   * pengguna baru hasil daftar Google harus diarahkan ke halaman pengenalan.
+   */
+  onLoginSuccess: (user: any) => void;
+  /** Buka halaman lupa password. Opsional supaya komponen tetap bisa dipakai
+   *  tanpa rute tersebut (misalnya di test atau pratinjau). */
+  onLupaPassword?: () => void;
 }
 
-export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
+export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onLupaPassword }) => {
  const [isRegister, setIsRegister] = useState(false);
  const [email, setEmail] = useState('');
  const [password, setPassword] = useState('');
  const [name, setName] = useState('');
+ const [phone, setPhone] = useState('');
  const [error, setError] = useState('');
  const [loading, setLoading] = useState(false);
  const [googleLoading, setGoogleLoading] = useState(false);
@@ -91,7 +100,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
  });
 
  if (res?.user) {
- onLoginSuccess(res.user);
+ teruskanLogin(res);
  }
  } catch (err: any) {
  setError(err.message || 'Gagal login via Google');
@@ -113,7 +122,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
  setGoogleLoading(true);
  setError('');
  const res = await apiLoginGoogle({ credential: response.credential });
- if (res?.user) onLoginSuccess(res.user);
+ if (res?.user) teruskanLogin(res);
  } catch (err: any) {
  setError(err.message || 'Gagal login dengan Google One Tap');
  } finally {
@@ -217,6 +226,19 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
  };
  }, [authConfig.turnstileEnabled, authConfig.turnstileSiteKey, isRegister]);
 
+ /**
+  * Teruskan hasil login ke App.
+  *
+  * Backend menandai akun Google yang BARU dibuat lewat field `perluOnboarding`
+  * di tingkat atas respons — bukan di dalam objek user. Penanda itu digabungkan
+  * ke objek user di sini supaya App bisa membacanya tanpa perlu tahu bentuk
+  * respons aslinya.
+  */
+ const teruskanLogin = (res: any) => {
+   if (!res?.user) return;
+   onLoginSuccess({ ...res.user, perluOnboarding: Boolean(res.perluOnboarding) });
+ };
+
  const handleSubmit = async (e: React.FormEvent) => {
  e.preventDefault();
  setLoading(true);
@@ -227,11 +249,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
  if (!authConfig.registrationEnabled) {
  throw new Error('Pendaftaran akun baru ditutup oleh Administrator.');
  }
- await apiRegister(name, email, password);
+ await apiRegister(name, email, password, phone);
  }
  const res = await apiLogin(email.trim().toLowerCase(), password, turnstileToken || undefined);
  setLoading(false);
- onLoginSuccess(res.user);
+ teruskanLogin(res);
  } catch (err: any) {
  setLoading(false);
  setError(err.message || 'Gagal masuk. Periksa email dan password.');
@@ -334,8 +356,34 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
  </div>
  </div>
 
+ {/* Nomor WhatsApp hanya muncul di mode daftar. Login tidak
+     membutuhkannya, dan menampilkannya di sana hanya menambah kolom
+     yang tidak berfungsi. */}
+ {isRegister && (
+   <div>
+     <label className='block text-xs font-semibold text-ink-muted mb-1'>
+       Nomor WhatsApp <span className='font-normal text-ink-faint'>(opsional)</span>
+     </label>
+     <div className='relative'>
+       <Phone className='absolute left-3.5 top-3 text-ink-faint' size={15} />
+       <input
+         type='tel'
+         inputMode='tel'
+         autoComplete='tel'
+         value={phone}
+         onChange={(e) => setPhone(e.target.value)}
+         placeholder='08123456789'
+         className='w-full bg-surface-sunken border border-line rounded-md pl-10 pr-3.5 py-2.5 text-xs text-ink focus:outline-none focus:border-pine transition'
+       />
+     </div>
+     <p className='text-[11px] text-ink-faint mt-1.5'>
+       Boleh dikosongkan. Format yang diterima: 08123456789 atau +628123456789.
+     </p>
+   </div>
+ )}
+
  <div>
- <label className='block text-xs font-semibold text-ink-muted mb-1'>Password</label>
+   <label className='block text-xs font-semibold text-ink-muted mb-1'>Password</label>
  <div className='relative'>
  <Lock className='absolute left-3.5 top-3 text-ink-faint' size={15} />
  <input
@@ -348,6 +396,20 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
  />
  </div>
  </div>
+
+ {/* Tautan lupa password. Disembunyikan saat mode daftar — pengguna baru
+ belum punya password untuk dilupakan. */}
+ {!isRegister && (
+ <div className='flex justify-end -mt-1'>
+ <button
+ type='button'
+ onClick={onLupaPassword}
+ className='text-[11px] text-ink-muted hover:text-pine transition cursor-pointer'
+ >
+ Lupa password?
+ </button>
+ </div>
+ )}
 
  {/* Cloudflare Turnstile Widget */}
  {authConfig.turnstileEnabled && authConfig.turnstileSiteKey && (

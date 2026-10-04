@@ -11,7 +11,7 @@ import { BaileysEngine } from './engine/BaileysEngine.js';
 import { requireApiKey, requireJwt, requireAdmin, requireAuth } from './auth.js';
 import { hashPassword, verifyPassword, generateApiKey, rateLimitHook, checkLoginBruteForce, recordLoginFailure, recordLoginSuccess, verifyTurnstileToken, getClientIp } from './security.js';
 import {
-  getUserByEmail, getUserById, listUsers, createUser,
+  getUserByEmail, getUserByPhone, getUserById, listUsers, createUser,
   upsertWebhook, listWebhooks, listMessages, listMessagesPaged, updateUser, deleteUser, setUserPassword, setUserApiKey,
   setUserBlastPin, clearUserBlastPin, getUserBlastAccessToken, createBlastLaunchToken, verifyAndBurnBlastLaunchToken,
   getOrCreateUserBlastAccessToken, rotateUserBlastAccessToken, getUserByBlastAccessToken,
@@ -19,6 +19,22 @@ import {
   getSetting, getAllSettings, setSettings, getAllUserSettings, setUserSettings, upsertGoogleUser, checkAndIncrementWeeklyQuota, checkAndIncrementQuota, refundQuota, getUserLogs, insertApiLog, listApiLogs, deleteApiLogs, clearApiLogs,
 } from './db.js';
 import { EMPTY_SESSIONS } from './seed-sessions.js';
+import { normalisasiNomor } from './phone.js';
+import {
+  ajukanResetPassword,
+  verifikasiTokenReset,
+  pakaiTokenReset,
+} from './password-reset.js';
+import { kirimEmailRegistrasi } from './notifikasi-email.js';
+import {
+  ambilKonfigurasiMail,
+  simpanKonfigurasiMail,
+  ujiKoneksiMail,
+  kirimEmail,
+  konfigurasiUntukKlien,
+  PRESET_PROVIDER,
+} from './mailer.js';
+import { templateEmailUji, templateEmailUjiTeks, BRAND } from './mail-templates.js';
 
 const app = Fastify({ logger: true, bodyLimit: 50 * 1024 * 1024 }); // 50MB body limit untuk upload media base64
 await app.register(cors, { origin: true });
@@ -182,6 +198,9 @@ const registerSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   password: z.string().min(6),
+  // Nomor WhatsApp opsional, sama seperti di panel admin. Diterima dalam bentuk
+  // apa pun yang lazim ditulis (08xx, +62xxx, 62xxx) lalu dinormalisasi.
+  phone: z.string().optional(),
 });
 
 const webhookSchema = z.object({
@@ -201,6 +220,20 @@ const createUserSchema = z.object({
   quotaPeriod: z.enum(['daily', 'weekly', 'monthly']).optional(),
   quotaLimit: z.coerce.number().int().min(1).optional(),
   assignedSessionId: z.string().optional(),
+  // Nomor telepon opsional. Diterima dalam bentuk apa pun yang lazim ditulis
+  // (08xx, +62xxx, 62xxx) lalu dinormalisasi ke bentuk kanonik 628xxx.
+  phone: z.string().optional(),
+});
+
+// Skema reset password mandiri. Aturan panjang password disamakan dengan
+// endpoint reset-password milik admin supaya tidak ada dua aturan berbeda.
+const forgotPasswordSchema = z.object({
+  email: z.string().email(),
+});
+
+const resetPasswordSchema = z.object({
+  token: z.string().min(16),
+  password: z.string().min(6).max(200),
 });
 
 function parseBody<T>(schema: z.ZodSchema<T>, body: unknown): { ok: true; data: T } | { ok: false; error: string } {
@@ -283,6 +316,59 @@ app.get('/api/v1/auth/me', { preHandler: requireAuth }, async (req, reply) => {
     usedThisWeek: user.usedThisWeek,
     status: user.status,
     hasBlastPin: !!user.blastPinHash,
+    phone: user.phone || '',
+    // Panel memakai ini untuk memutuskan perlu menampilkan onboarding.
+    perluOnboarding: !user.phone,
+  };
+});
+
+// Lengkapi profil sendiri (dipakai halaman onboarding setelah daftar via Google)
+app.patch('/api/v1/auth/me', { preHandler: requireAuth }, async (req, reply) => {
+  const user = req.apiKeyUser || getUserById((req.user as any)?.id);
+  if (!user) return reply.code(404).send({ error: 'User tidak ditemukan' });
+
+  const body = (req.body || {}) as { phone?: unknown; name?: unknown };
+
+  const patch: { phone?: string | null; name?: string } = {};
+
+  if (body.name !== undefined) {
+    const nama = String(body.name).trim();
+    if (!nama) return reply.code(400).send({ error: 'Nama tidak boleh kosong' });
+    patch.name = nama;
+  }
+
+  if (body.phone !== undefined) {
+    const mentah = String(body.phone).trim();
+    if (mentah === '') {
+      // Kosong berarti menghapus nomor — berguna kalau salah isi.
+      patch.phone = null;
+    } else {
+      const kanonik = normalisasiNomor(mentah);
+      if (!kanonik) {
+        return reply.code(400).send({
+          error: 'Nomor WhatsApp tidak valid. Contoh format yang diterima: 08123456789 atau +628123456789.',
+        });
+      }
+      const pemilik = getUserByPhone(kanonik);
+      if (pemilik && pemilik.id !== user.id) {
+        return reply.code(409).send({ error: 'Nomor WhatsApp sudah dipakai akun lain' });
+      }
+      patch.phone = kanonik;
+    }
+  }
+
+  updateUser(user.id, patch);
+  const segar = getUserById(user.id)!;
+
+  return {
+    success: true,
+    user: {
+      id: segar.id,
+      name: segar.name,
+      email: segar.email,
+      phone: segar.phone || '',
+      perluOnboarding: !segar.phone,
+    },
   };
 });
 
@@ -477,23 +563,85 @@ app.post('/api/v1/auth/google', async (req, reply) => {
 
   // Catatan: Google Auth selalu mengizinkan user baru terlepas dari toggle form registrasi publik manual
 
-  const user = upsertGoogleUser({
+  const { user, baru } = upsertGoogleUser({
     googleId,
     email: googleEmail,
     name: googleName || 'Google User',
     avatarUrl: googleAvatar,
   });
 
+  // Email selamat datang hanya untuk akun yang BARU dibuat. Pengguna lama yang
+  // sekadar login ulang tidak perlu dikirimi lagi.
+  //
+  // Ditunggu (await) supaya tidak ada email yang menggantung saat proses mati,
+  // tapi kegagalannya tidak mempengaruhi hasil login — lihat notifikasi-email.ts.
+  if (baru) {
+    await kirimEmailRegistrasi({
+      email: user.email,
+      nama: user.name,
+      metode: 'google',
+      kuotaPerHari: user.quotaPerDay ?? 100,
+      kuotaPerMinggu: user.quotaPerWeek ?? 700,
+      butuhNomorWa: !user.phone,
+    });
+  }
+
   const token = app.jwt.sign({ id: user.id, role: user.role, email: user.email });
-  return { token, user };
+  // `perluOnboarding` dipakai panel untuk memutuskan menampilkan halaman
+  // pelengkapan profil. Hanya true untuk akun Google baru yang belum punya
+  // nomor WhatsApp — pendaftar manual sudah mengisi nomornya di formulir.
+  //
+  // Field dikirim satu per satu, sama seperti /auth/login. Sebelumnya objek user
+  // dikirim utuh dan itu ikut membawa `passwordHash` ke browser.
+  return {
+    token,
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      apiKey: user.apiKey,
+      quotaPerDay: user.quotaPerDay,
+      usedToday: user.usedToday,
+      quotaPerWeek: user.quotaPerWeek,
+      usedThisWeek: user.usedThisWeek,
+      status: user.status,
+      hasBlastPin: !!user.blastPinHash,
+      phone: user.phone || '',
+    },
+    perluOnboarding: baru && !user.phone,
+  };
 });
 
 app.post('/api/v1/auth/register', async (req, reply) => {
+  // Hormati toggle pendaftaran publik. Tanpa ini, toggle di panel hanya
+  // menyembunyikan formulir di UI — endpoint-nya masih terbuka bagi siapa pun
+  // yang tahu alamatnya.
+  if (getSetting('registration_enabled') === 'false') {
+    return reply.code(403).send({ error: 'Pendaftaran akun baru ditutup oleh Administrator.' });
+  }
+
   const parsed = parseBody(registerSchema, req.body);
   if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
   const { data } = parsed;
 
   if (getUserByEmail(data.email)) return reply.code(409).send({ error: 'Email sudah terdaftar' });
+
+  // Normalisasi nomor WhatsApp. Sama seperti di endpoint admin: format yang
+  // tidak masuk akal ditolak di sini, bukan disimpan diam-diam.
+  let phone: string | undefined;
+  if (data.phone && data.phone.trim() !== '') {
+    const kanonik = normalisasiNomor(data.phone);
+    if (!kanonik) {
+      return reply.code(400).send({
+        error: 'Nomor WhatsApp tidak valid. Contoh format yang diterima: 08123456789 atau +628123456789.',
+      });
+    }
+    if (getUserByPhone(kanonik)) {
+      return reply.code(409).send({ error: 'Nomor WhatsApp sudah dipakai akun lain' });
+    }
+    phone = kanonik;
+  }
 
   const user = createUser({
     name: data.name,
@@ -502,9 +650,25 @@ app.post('/api/v1/auth/register', async (req, reply) => {
     role: 'user',
     apiKey: generateApiKey('wa'),
     quotaPerDay: 100,
+    phone,
     status: 'active',
   });
-  return reply.code(201).send({ success: true, user: { id: user.id, name: user.name, email: user.email, apiKey: user.apiKey } });
+
+  // Email selamat datang. Kegagalannya tidak membatalkan pendaftaran — akun
+  // sudah terbentuk di atas dan pengguna tetap bisa masuk.
+  await kirimEmailRegistrasi({
+    email: user.email,
+    nama: user.name,
+    metode: 'manual',
+    kuotaPerHari: user.quotaPerDay ?? 100,
+    kuotaPerMinggu: user.quotaPerWeek ?? 700,
+    butuhNomorWa: !user.phone,
+  });
+
+  return reply.code(201).send({
+    success: true,
+    user: { id: user.id, name: user.name, email: user.email, phone: user.phone, apiKey: user.apiKey },
+  });
 });
 
 // ============ Users ============
@@ -526,6 +690,25 @@ app.post('/api/v1/users', { preHandler: requireAdmin }, async (req, reply) => {
 
   if (getUserByEmail(data.email)) return reply.code(409).send({ error: 'Email sudah terdaftar' });
 
+  // Normalisasi nomor telepon ke bentuk kanonik. Kalau formatnya tidak masuk
+  // akal, tolak di sini — jangan simpan nomor yang salah diam-diam.
+  let phone: string | undefined;
+  if (data.phone && data.phone.trim() !== '') {
+    const kanonik = normalisasiNomor(data.phone);
+    if (!kanonik) {
+      return reply.code(400).send({
+        error: 'Nomor telepon tidak valid. Contoh format yang diterima: 08123456789 atau +628123456789.',
+      });
+    }
+    // Diperiksa lebih dulu supaya balasannya 409 dengan pesan yang jelas.
+    // Tanpa ini, UNIQUE INDEX di database melempar error SQLite mentah dan
+    // pengguna hanya melihat "Internal Server Error".
+    if (getUserByPhone(kanonik)) {
+      return reply.code(409).send({ error: 'Nomor telepon sudah dipakai akun lain' });
+    }
+    phone = kanonik;
+  }
+
   const user = createUser({
     name: data.name,
     email: data.email,
@@ -537,6 +720,7 @@ app.post('/api/v1/users', { preHandler: requireAdmin }, async (req, reply) => {
     quotaLimit: data.quotaLimit,
     assignedSessionId: data.assignedSessionId,
     status: 'active',
+    phone,
   });
   return reply.code(201).send({ success: true, user: { ...user, passwordHash: undefined } });
 });
@@ -550,6 +734,47 @@ app.post('/api/v1/users/:id/rotate-key', { preHandler: requireAdmin }, async (re
     return { success: true, apiKey: newKey };
 });
 
+// ============ Reset Password Mandiri ============
+//
+// Tiga endpoint publik di bawah ini adalah jalur pemulihan akun. Aturan
+// keamanannya ada di password-reset.ts; yang perlu diperhatikan di sini adalah
+// endpoint `forgot-password` SELALU membalas pesan yang sama, apa pun hasilnya,
+// supaya tidak bisa dipakai memetakan email mana yang terdaftar.
+
+app.post('/api/v1/auth/forgot-password', async (req, reply) => {
+  const parsed = parseBody(forgotPasswordSchema, req.body);
+  if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+
+  const clientIp = getClientIp(req);
+  const hasil = await ajukanResetPassword(parsed.data.email, clientIp);
+
+  // Saat dibatasi (rate limit), kode 429 dikembalikan — ini satu-satunya
+  // pengecualian, dan memang disengaja: pengguna yang sah perlu tahu bahwa dia
+  // harus menunggu, sementara penyerang sudah jelas tahu dia sedang dibatasi.
+  if (!hasil.ok) {
+    return reply.code(429).send({ error: hasil.pesan });
+  }
+  return { success: true, message: hasil.pesan };
+});
+
+// Periksa token sebelum menampilkan form password baru. Tanpa ini, pengguna
+// mengisi password baru dulu, baru diberi tahu tautannya kedaluwarsa.
+app.get('/api/v1/auth/reset-password/verify', async (req) => {
+  const token = String((req.query as any)?.token || '');
+  const hasil = verifikasiTokenReset(token);
+  // Token tidak valid bukan error server — ini jawaban sah, jadi 200.
+  return { valid: hasil.valid, name: hasil.nama, message: hasil.pesan };
+});
+
+app.post('/api/v1/auth/reset-password', async (req, reply) => {
+  const parsed = parseBody(resetPasswordSchema, req.body);
+  if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+
+  const hasil = pakaiTokenReset(parsed.data.token, parsed.data.password);
+  if (!hasil.ok) return reply.code(400).send({ error: hasil.pesan });
+  return { success: true, message: hasil.pesan };
+});
+
 // ============ Users CRUD (admin only) ============
 app.patch('/api/v1/users/:id', { preHandler: requireAdmin }, async (req, reply) => {
   const { id } = req.params as { id: string };
@@ -559,6 +784,30 @@ app.patch('/api/v1/users/:id', { preHandler: requireAdmin }, async (req, reply) 
   if (cur.role === 'admin' && body.role && body.role !== 'admin') {
     return reply.code(400).send({ error: 'Tidak bisa menurunkan role admin' });
   }
+
+  // Nomor telepon: undefined = jangan sentuh, kosong = hapus, ada isi = normalisasi.
+  // Dibedakan begini supaya mengosongkan kolom di panel benar-benar menghapus
+  // nomor, bukan malah mempertahankan nilai lama.
+  let phonePatch: string | null | undefined = undefined;
+  if (body.phone !== undefined) {
+    if (body.phone === null || String(body.phone).trim() === '') {
+      phonePatch = null;
+    } else {
+      const kanonik = normalisasiNomor(String(body.phone));
+      if (!kanonik) {
+        return reply.code(400).send({
+          error: 'Nomor telepon tidak valid. Contoh format yang diterima: 08123456789 atau +628123456789.',
+        });
+      }
+      // Cek duplikat sebelum menyentuh database — lihat catatan di POST /users.
+      const pemilik = getUserByPhone(kanonik);
+      if (pemilik && pemilik.id !== id) {
+        return reply.code(409).send({ error: 'Nomor telepon sudah dipakai akun lain' });
+      }
+      phonePatch = kanonik;
+    }
+  }
+
   const user = updateUser(id, {
     name: body.name,
     role: body.role,
@@ -568,6 +817,7 @@ app.patch('/api/v1/users/:id', { preHandler: requireAdmin }, async (req, reply) 
     quotaPeriod: body.quotaPeriod,
     status: body.status,
     assignedSessionId: body.assignedSessionId === undefined ? undefined : (body.assignedSessionId || null),
+    phone: phonePatch,
   });
   return { success: true, user: { ...user, passwordHash: undefined } };
 });
@@ -1536,7 +1786,11 @@ app.get('/api/v1/settings', { preHandler: requireAuth }, async (req, reply) => {
       turnstileSecretKey: all['turnstile_secret_key'] ? '••••••••' : '',
       hasTurnstileSecret: Boolean(all['turnstile_secret_key']),
       blastDashboardUrl: all['blast_dashboard_url'] || 'http://172.30.30.229:8085',
+      // Konfigurasi email. Password TIDAK pernah dikirim utuh ke klien — hanya
+      // penanda bahwa password sudah tersimpan.
+      mail: konfigurasiUntukKlien(),
     },
+    mailPresets: PRESET_PROVIDER,
   };
 });
 
@@ -1586,6 +1840,53 @@ app.patch('/api/v1/settings', { preHandler: requireAuth }, async (req, reply) =>
   }
   setSettings(updates);
   return { success: true, message: 'Pengaturan berhasil diperbarui.' };
+});
+
+// Simpan konfigurasi email. Dipisah dari PATCH /settings di atas karena
+// password perlu diperlakukan berbeda: nilai '••••••••' berarti "jangan ubah",
+// bukan "simpan string titik-titik ini".
+app.put('/api/v1/settings/mail', { preHandler: requireAuth }, async (req, reply) => {
+  const user = (req as any).user || (req as any).apiKeyUser;
+  if (!user || user.role !== 'admin') {
+    return reply.code(403).send({ error: 'Akses ditolak. Khusus Administrator.' });
+  }
+  const body = (req.body || {}) as Record<string, unknown>;
+  const hasil = simpanKonfigurasiMail(body);
+  if (!hasil.ok) return reply.code(400).send({ error: hasil.pesan });
+  return { success: true, message: hasil.pesan };
+});
+
+// Uji koneksi ke server SMTP tanpa mengirim apa pun.
+app.post('/api/v1/settings/mail/test', { preHandler: requireAuth }, async (req, reply) => {
+  const user = (req as any).user || (req as any).apiKeyUser;
+  if (!user || user.role !== 'admin') {
+    return reply.code(403).send({ error: 'Akses ditolak. Khusus Administrator.' });
+  }
+  const hasil = await ujiKoneksiMail();
+  if (!hasil.ok) return reply.code(400).send({ success: false, error: hasil.pesan });
+  return { success: true, message: hasil.pesan };
+});
+
+// Kirim email uji sungguhan ke alamat tujuan.
+app.post('/api/v1/settings/mail/send-test', { preHandler: requireAuth }, async (req, reply) => {
+  const user = (req as any).user || (req as any).apiKeyUser;
+  if (!user || user.role !== 'admin') {
+    return reply.code(403).send({ error: 'Akses ditolak. Khusus Administrator.' });
+  }
+  const tujuan = String((req.body as any)?.to || user.email || '').trim();
+  if (!tujuan || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(tujuan)) {
+    return reply.code(400).send({ error: 'Alamat tujuan tidak valid.' });
+  }
+
+  const hasil = await kirimEmail({
+    tujuan,
+    subjek: `${BRAND.nama} — Uji Konfigurasi Email`,
+    html: templateEmailUji({ tujuan }),
+    teks: templateEmailUjiTeks({ tujuan }),
+  });
+
+  if (!hasil.ok) return reply.code(400).send({ success: false, error: hasil.pesan });
+  return { success: true, message: `Email uji terkirim ke ${tujuan}.` };
 });
 
 
