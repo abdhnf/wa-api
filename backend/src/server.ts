@@ -1786,6 +1786,10 @@ app.get('/api/v1/settings', { preHandler: requireAuth }, async (req, reply) => {
       turnstileSecretKey: all['turnstile_secret_key'] ? '••••••••' : '',
       hasTurnstileSecret: Boolean(all['turnstile_secret_key']),
       blastDashboardUrl: all['blast_dashboard_url'] || 'http://172.30.30.229:8085',
+      // Basis URL panel ini sendiri. Dipakai menyusun tautan di email (reset
+      // password, buka dashboard). Kosong berarti belum pernah diatur dan
+      // kode akan jatuh ke env, lalu ke alamat pengembangan — lihat panel-url.ts.
+      panelBaseUrl: all['panel_base_url'] || '',
       // Konfigurasi email. Password TIDAK pernah dikirim utuh ke klien — hanya
       // penanda bahwa password sudah tersimpan.
       mail: konfigurasiUntukKlien(),
@@ -1809,6 +1813,7 @@ app.patch('/api/v1/settings', { preHandler: requireAuth }, async (req, reply) =>
     turnstileSiteKey?: string;
     turnstileSecretKey?: string;
     blastDashboardUrl?: string;
+    panelBaseUrl?: string;
   };
   const updates: Record<string, string> = {};
   if (body.googleAuthEnabled !== undefined) {
@@ -1837,6 +1842,18 @@ app.patch('/api/v1/settings', { preHandler: requireAuth }, async (req, reply) =>
   }
   if (body.blastDashboardUrl !== undefined) {
     updates['blast_dashboard_url'] = body.blastDashboardUrl.trim();
+  }
+  if (body.panelBaseUrl !== undefined) {
+    const nilai = body.panelBaseUrl.trim().replace(/\/+$/, '');
+    // Nilai kosong sah: artinya "jangan pakai nilai dari tabel", dan kode akan
+    // jatuh ke env. Selain itu wajib http/https — alamat tanpa skema akan
+    // menghasilkan tautan relatif di email dan tidak bisa diklik.
+    if (nilai !== '' && !/^https?:\/\/[^\s]+$/i.test(nilai)) {
+      return reply.code(400).send({
+        error: 'Basis URL panel harus diawali http:// atau https:// dan tidak boleh mengandung spasi.',
+      });
+    }
+    updates['panel_base_url'] = nilai;
   }
   setSettings(updates);
   return { success: true, message: 'Pengaturan berhasil diperbarui.' };

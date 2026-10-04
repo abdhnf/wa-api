@@ -10,28 +10,12 @@
  * ditelan dan hanya dicatat di log.
  */
 
-import { getSetting } from './db.js';
 import { kirimEmail, konfigurasiLengkap } from './mailer.js';
+import { ambilBasisPanel } from './panel-url.js';
 import {
   templateRegistrasiBerhasil,
   templateRegistrasiBerhasilTeks,
 } from './mail-templates.js';
-
-/**
- * Alamat panel yang bisa dibuka pengguna.
- *
- * Diambil dari pengaturan dulu supaya admin bisa mengubahnya tanpa deploy,
- * baru jatuh ke env, lalu ke alamat pengembangan.
- */
-export function ambilBasisPanel(): string {
-  const dariPengaturan = (getSetting('panel_base_url') || '').trim();
-  if (dariPengaturan) return dariPengaturan.replace(/\/+$/, '');
-
-  const dariEnv = (process.env.PANEL_BASE_URL || '').trim();
-  if (dariEnv) return dariEnv.replace(/\/+$/, '');
-
-  return 'http://172.30.30.229:5174';
-}
 
 export interface HasilKirimNotifikasi {
   terkirim: boolean;
