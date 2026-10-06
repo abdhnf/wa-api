@@ -60,6 +60,18 @@ export interface OutboundMessage {
   timestamp: string;
   waMessageId?: string;
   priority?: 'high' | 'normal';
+  /**
+   * Waktu kejadian per status, epoch milidetik.
+   *
+   * Diisi saat status BENAR-BENAR berubah — bukan saat kampanye dibuat. Untuk
+   * `sent`/`delivered`/`read`, nilainya berasal dari timestamp asli WhatsApp
+   * (event `messages.update` / `message-receipt.update`), bukan jam server.
+   *
+   * Hanya ditulis sekali per status. Pesan yang dibuat sebelum fitur ini tidak
+   * punya field ini — dan sengaja tidak diisi ulang, karena waktu aslinya tidak
+   * pernah tersimpan sehingga nilai apa pun hanya akan jadi tebakan.
+   */
+  statusTimes?: Partial<Record<MessageStatus, number>>;
 }
 
 export interface QueueSessionStatus {

@@ -6,10 +6,16 @@ import { getUserById } from './users.js';
 export function insertMessage(m: OutboundMessage, defaultUserId = 'usr_c26f74d6'): void {
   const uid = m.userId || defaultUserId;
   const priority = m.priority || 'normal';
+  // Catat waktu status awal (biasanya 'queued') di titik pesan MASUK antrean.
+  // `m.timestamp` diisi oleh pemanggil tepat sebelum ini, jadi waktunya sama
+  // dengan created_at — konsisten, tidak ada dua sumber waktu yang berbeda.
+  // Kalau pemanggil sudah mengisi statusTimes sendiri, itu yang dipakai.
+  const statusTimes = m.statusTimes ?? { [m.status]: Date.parse(m.timestamp) || Date.now() };
+  const payload = { ...m, statusTimes };
   db.prepare(
     `INSERT INTO messages (id, session_id, user_id, mode, recipient, payload, status, jitter_delay_ms, batch_id, created_at, priority)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(m.id, m.sessionId, uid, m.mode, m.to, JSON.stringify(m), m.status, m.jitterDelayMs, m.batchId ?? null, m.timestamp, priority);
+  ).run(m.id, m.sessionId, uid, m.mode, m.to, JSON.stringify(payload), m.status, m.jitterDelayMs, m.batchId ?? null, m.timestamp, priority);
 }
 
 /**
@@ -37,7 +43,39 @@ const STATUS_RANK: Record<string, number> = {
 /** Status yang selalu boleh ditulis, apa pun status sebelumnya. */
 const FORCED_STATUSES = new Set(['failed', 'invalid_number', 'not_registered', 'cancelled']);
 
-export function updateMessageStatus(id: string, status: OutboundMessage['status'], errorDetail?: string, jitterDelayMs?: number): void {
+/**
+ * Normalisasi waktu kejadian dari WhatsApp menjadi epoch MILIDETIK.
+ *
+ * WhatsApp mengirim timestamp dalam DETIK (`attrs.t`), sedangkan yang disimpan
+ * dan dipakai panel dalam milidetik. Konversi sengaja hanya ada di satu tempat
+ * ini supaya tidak ada dua aturan berbeda.
+ *
+ * Nilai yang tidak masuk akal DITOLAK, bukan ditebak: `attrs.t` bernilai 0 atau
+ * kosong saat WhatsApp tidak menyertakan waktu, dan `0 * 1000` akan tersimpan
+ * sebagai 1 Januari 1970 — jauh lebih buruk daripada jatuh ke jam server.
+ * Ambang bawah 2001 dipilih karena WhatsApp sendiri baru ada setelah itu.
+ */
+const AMBANG_WAKTU_MS = 1_000_000_000_000; // 2001-09-09, jauh sebelum WhatsApp dipakai
+
+function normalisasiWaktu(mentah: unknown): number | undefined {
+  if (typeof mentah !== 'number' || !Number.isFinite(mentah) || mentah <= 0) return undefined;
+  // Nilai di bawah ambang berarti masih dalam detik, bukan milidetik.
+  const ms = mentah < AMBANG_WAKTU_MS ? mentah * 1000 : mentah;
+  return ms >= AMBANG_WAKTU_MS ? Math.round(ms) : undefined;
+}
+
+export function updateMessageStatus(
+  id: string,
+  status: OutboundMessage['status'],
+  errorDetail?: string,
+  jitterDelayMs?: number,
+  /**
+   * Waktu kejadian sebenarnya. Diisi HANYA oleh pemanggil yang punya timestamp
+   * asli dari WhatsApp (`BaileysEngine`); pemanggil lain dibiarkan memakai jam
+   * server. Diterima dalam detik maupun milidetik — dinormalisasi di sini.
+   */
+  waktuKejadian?: number,
+): void {
   const row = db.prepare('SELECT status, payload, jitter_delay_ms FROM messages WHERE id = ?').get(id) as any;
   if (row) {
     // Tolak kemunduran status. 'failed' dan status terminal lain selalu lolos
@@ -57,6 +95,19 @@ export function updateMessageStatus(id: string, status: OutboundMessage['status'
       obj.status = status;
       if (errorDetail !== undefined) {
         obj.errorDetail = errorDetail;
+      }
+      // Catat waktu kejadian. HANYA bila status ini belum pernah tercatat:
+      // `pacing` dipanggil berkali-kali untuk satu pesan (tiga titik di
+      // session-manager, plus saat pesan dikembalikan ke depan antrean), dan
+      // tanpa aturan ini kemunculan terakhir akan menimpa yang pertama.
+      // Yang ingin dijawab operator adalah "kapan pesan ini mulai menunggu",
+      // bukan "kapan pemeriksaan terakhir dilakukan".
+      if (!obj.statusTimes || typeof obj.statusTimes !== 'object') {
+        obj.statusTimes = {};
+      }
+      if (obj.statusTimes[status] === undefined) {
+        const waktu = normalisasiWaktu(waktuKejadian) ?? Date.now();
+        obj.statusTimes[status] = waktu;
       }
       if (jitterDelayMs !== undefined) {
         obj.jitterDelayMs = jitterDelayMs;

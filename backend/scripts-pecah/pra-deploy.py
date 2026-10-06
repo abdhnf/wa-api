@@ -18,10 +18,12 @@ AKAR = Path(__file__).resolve().parent.parent
 
 # Berkas yang isinya memang berubah karena refactor, per tahap.
 BOLEH_BERBEDA = {
-    'server.js',          # tahap 1 — 2.095 baris jadi bootstrap tipis
-    'mail-templates.js',  # tahap 2 — 610 baris jadi fasad re-export
-    'db.js',              # tahap 3 — 1.444 baris jadi fasad re-export
-    'antiban.js',         # tahap 4 — 1.282 baris jadi fasad re-export
+    'server.js',               # tahap 1 — 2.095 baris jadi bootstrap tipis
+    'mail-templates.js',       # tahap 2 — 610 baris jadi fasad re-export
+    'db.js',                   # tahap 3 — 1.444 baris jadi fasad re-export
+    'antiban.js',              # tahap 4 — 1.282 baris jadi fasad re-export
+    'db/pesan.js',             # fitur waktu per status — pencatatan statusTimes
+    'engine/BaileysEngine.js', # fitur waktu per status — pakai timestamp WhatsApp
 }
 
 

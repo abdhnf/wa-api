@@ -175,7 +175,7 @@ export class BaileysEngine {
         // Cek apakah ada error penolakan server (misal 463 Reachout restriction atau ERROR status)
         if (statusVal === 0 || statusVal === 'ERROR' || (Array.isArray(stubParams) && stubParams.includes('463'))) {
           const reason = Array.isArray(stubParams) ? stubParams.join(': ') : 'Gagal terkirim oleh server WhatsApp';
-          updateMessageStatus(msg.id, 'failed', reason);
+          updateMessageStatus(msg.id, 'failed', reason, undefined, updateObj.messageTimestamp);
           if (Array.isArray(stubParams) && stubParams.includes('463')) {
             this.on463Callback?.(msg.sessionId);
           }
@@ -186,19 +186,30 @@ export class BaileysEngine {
         // 2 = SERVER_ACK (centang satu / sampai server WA) -> status 'sent'
         // 3 = DELIVERY_ACK (centang dua abu / diterima di HP penerima) -> status 'delivered'
         // 4 = READ / PLAYED (centang dua biru) -> status 'read'
+        //
+        // `updateObj.messageTimestamp` adalah waktu kejadian dari WhatsApp
+        // (epoch detik, berasal dari `attrs.t`). Dipakai apa adanya supaya yang
+        // tampil di panel adalah waktu WhatsApp, bukan waktu server kita
+        // memproses event — selisihnya bisa detik sampai menit saat antrean
+        // event menumpuk. Bila WhatsApp tidak menyertakannya, `updateMessageStatus`
+        // otomatis jatuh ke jam server.
+        const waktu = updateObj.messageTimestamp;
         if (statusVal === 3 || statusVal === 'DELIVERY_ACK') {
-          updateMessageStatus(msg.id, 'delivered');
+          updateMessageStatus(msg.id, 'delivered', undefined, undefined, waktu);
         } else if (statusVal === 4 || statusVal === 5 || statusVal === 'READ' || statusVal === 'PLAYED') {
-          updateMessageStatus(msg.id, 'read');
+          updateMessageStatus(msg.id, 'read', undefined, undefined, waktu);
         } else if (statusVal === 2 || statusVal === 'SERVER_ACK') {
-          updateMessageStatus(msg.id, 'sent');
+          updateMessageStatus(msg.id, 'sent', undefined, undefined, waktu);
         }
       }
     });
     // Read receipt datang lewat event TERPISAH dari messages.update.
-    // Ini jalur yang paling andal untuk status 'read'/'delivered', karena
-    // receipt dikirim ulang setelah reconnect — sedangkan messages.update
-    // tidak. Tanpa listener ini, pesan yang sudah dibaca tetap tampil 'sent'.
+    //
+    // Catatan penting soal cakupan: di Baileys, event ini hanya di-emit untuk
+    // JID grup dan status broadcast (`isJidGroup(remoteJid) ||
+    // isJidStatusBroadcast(remoteJid)` — lib/Socket/messages-recv.js). Untuk
+    // chat pribadi, delivered/read datang lewat `messages.update` di atas.
+    // Karena itu listener ini BUKAN jalur utama untuk chat pribadi.
     socket.ev.on('message-receipt.update', (updates) => {
       for (const u of updates || []) {
         const waId = u?.key?.id;
@@ -209,13 +220,14 @@ export class BaileysEngine {
         const receipt = (u as any).receipt || {};
         // readTimestamp = pesan dibaca; playedTimestamp = media diputar.
         // receiptTimestamp hanya menandai sampai di perangkat penerima.
+        // Ketiganya epoch DETIK dan jadi waktu kejadian asli untuk status ini.
         const hasRead = Boolean(receipt.readTimestamp) || Boolean(receipt.playedTimestamp);
         const hasDelivered = Boolean(receipt.receiptTimestamp);
 
         if (hasRead) {
-          updateMessageStatus(msg.id, 'read');
+          updateMessageStatus(msg.id, 'read', undefined, undefined, receipt.readTimestamp || receipt.playedTimestamp);
         } else if (hasDelivered) {
-          updateMessageStatus(msg.id, 'delivered');
+          updateMessageStatus(msg.id, 'delivered', undefined, undefined, receipt.receiptTimestamp);
         }
       }
     });
