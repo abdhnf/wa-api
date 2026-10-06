@@ -7,7 +7,7 @@ import {
   Search, Info, Timer
 } from 'lucide-react';
 import { type QueueItem, type Session, EMPTY_SESSIONS, EMPTY_QUEUE } from '../dummyData';
-import { MessageStatusBadge } from '../lib/messageStatus';
+import { MessageStatusBadge, JamStatus } from '../lib/messageStatus';
 import { apiGetSessions, apiGetSessionMessages, apiSendBulk, apiGetAntiBan, apiUpdateAntiBan, apiResetReplyRatioCooldown, apiRetryMessage, apiGetQueueStatus, apiPauseQueue, apiResumeQueue, apiUpdateSessionProfile, apiGetBatchApproval, apiApproveBatchRecipients, apiRevokeBatchApproval } from '../api';
 import { Toast } from './Toast';
 import { AutoRotateSettings } from './AutoRotateSettings';
@@ -311,7 +311,8 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  remainingDelayMs: 0,
  timestamp: m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
  isBulk: !!m.batchId,
- })));
+ statusTimes: m.statusTimes,
+})));
  }
  } catch (e) {
    console.error('Gagal fetch queue', e);
@@ -542,8 +543,14 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  };
 
   // Badge status memakai sumber bersama agar konsisten dengan Command Center.
-  const getStatusBadge = (status: QueueItem['status']) => (
-    <MessageStatusBadge status={status} iconSize={12} />
+  // Jam status terkini ditulis di bawah badge supaya bisa dibandingkan antar
+  // baris tanpa membuka tooltip; `statusTimes` juga diteruskan ke badge agar
+  // rincian lengkap tiap tahap tetap tersedia saat ditelusuri.
+  const getStatusBadge = (status: QueueItem['status'], statusTimes?: QueueItem['statusTimes']) => (
+    <div className="inline-flex flex-col items-start gap-0.5">
+      <MessageStatusBadge status={status} iconSize={12} statusTimes={statusTimes} />
+      <JamStatus status={status} statusTimes={statusTimes} />
+    </div>
   );
 
  const getModeIcon = (mode: string) => {
@@ -1158,7 +1165,7 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  <table className="w-full text-left text-xs min-w-[650px]">
    <thead className="bg-surface-sunken text-ink-muted uppercase tracking-wider text-[11px]">
      <tr>
-       <th className="px-4 py-3">Waktu</th>
+       <th className="px-4 py-3">Masuk Antrean</th>
        <th className="px-4 py-3">Tujuan</th>
        <th className="px-4 py-3">Mode</th>
        <th className="px-4 py-3">Pesan</th>
@@ -1190,7 +1197,7 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
            </td>
            <td className="px-4 py-3 text-ink-muted max-w-[220px] truncate">{item.text}</td>
            <td className="px-4 py-3 font-mono text-ink-faint">{(item.jitterDelayMs / 1000).toFixed(1)}s</td>
-           <td className="px-4 py-3">{getStatusBadge(item.status)}</td>
+           <td className="px-4 py-3">{getStatusBadge(item.status, item.statusTimes)}</td>
            <td className="px-4 py-3 text-right">
              {isFailed ? (
                <button

@@ -6,6 +6,60 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
+## [Unreleased] — Waktu per transisi status pesan
+
+Fitur ini menjawab satu pertanyaan yang sebelumnya tidak bisa dijawab panel:
+**kapan** sebuah pesan berpindah status, dan **berapa lama** jedanya. Sebelumnya
+kolom waktu di semua tabel hanya memuat `created_at` — waktu pesan masuk antrean.
+Di bawah badge "Terkirim", angka itu menyesatkan, karena jeda anti-ban bisa
+membuat selisihnya bermenit-menit.
+
+Backend menyimpan waktu tiap transisi di `payload.statusTimes` (tanpa migrasi
+skema) memakai timestamp asli WhatsApp. Panel dan dashboard membacanya.
+
+### Added
+
+- **`statusTimes` di payload pesan** (`backend/src/db/pesan.ts`). Diisi di
+  `insertMessage` (waktu antrean) dan `updateMessageStatus` (tiap transisi).
+  Timestamp yang tidak masuk akal jatuh ke jam server.
+- **Kolom jam status terkini di sel Status, empat tabel panel:**
+  Playground, Monitor & Queue, Admin Command Center, dan modal Log pengguna.
+  Jam ditulis langsung di bawah badge supaya bisa dibandingkan antar baris tanpa
+  membuka tooltip — tooltip tidak tersedia di layar sentuh.
+- **Util bersama `panel/src/lib/messageStatus.tsx`:** `susunBarisWaktu`,
+  `ringkasWaktu`, `jamStatusTerakhir`, komponen `JamStatus`. Satu sumber
+  kebenaran; sebelumnya `getStatusBadge` diduplikasi dengan isi berbeda.
+
+### Fixed
+
+- **Status terminal selain `failed` tidak pernah tampil.** Panel hanya
+  menangani `failed`, sehingga pesan `not_registered` / `invalid_number` /
+  `cancelled` — yang waktunya sudah dicatat backend — tampil seolah masih di
+  antrean. Daftar kini sejalan dengan `FORCED_STATUSES` di backend.
+- **Pesan gagal tampil dengan centang hijau di modal Log pengguna.** Ikon hanya
+  memeriksa `failed`, jadi `not_registered` dan `invalid_number` terlihat
+  berhasil saat operator memindai daftar.
+- **Label status mentah di modal Log pengguna.** `LABEL_STATUS_PESAN` hanya
+  memuat enam status; sisanya tampil apa adanya (`not_registered`). Kini lengkap.
+- **`typeof NaN === 'number'`** membuat `NaN`/`Infinity` lolos dan tampil
+  sebagai baris berjam `-`. Diganti `Number.isFinite` di semua jalur.
+
+### Changed
+
+- **Header kolom "Waktu" menjadi "Masuk Antrean"** di keempat tabel. Kolom itu
+  memang berisi `created_at`; tanpa penamaan ulang, ia mudah tertukar dengan jam
+  status yang kini ada di sel Status.
+
+### Catatan
+
+- **Pesan lama tidak bisa direkonstruksi.** Pesan yang dibuat sebelum fitur ini
+  tidak punya `statusTimes`; panel menampilkan "Tidak ada catatan waktu per
+  tahap" apa adanya, bukan mengarang waktu dari `created_at`.
+- **Uji:** suite `wa-api` **8/8 lulus** (termasuk `uji-util-waktu-panel.mjs`
+  **34/34**).
+
+---
+
 ## [Unreleased] — Pemecahan berkas besar backend
 
 **Tema:** memecah empat berkas backend yang sudah terlalu besar menjadi modul per domain, tanpa mengubah perilaku.

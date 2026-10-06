@@ -35,6 +35,16 @@ jalankan uji-reset-password.mjs /tmp/refactor-resetpw.db
 jalankan uji-e2e-reset.mjs     /tmp/refactor-e2e-reset.db
 jalankan uji-e2e-daftar.mjs    /tmp/refactor-e2e-daftar.db
 jalankan uji-base-url-panel.mjs /tmp/refactor-baseurl.db
+# Uji fitur waktu per status: unit (DB) + end-to-end (HTTP). Keduanya memakai
+# DB /tmp sendiri, jadi variabel DATABASE_PATH di sini tidak dipakai skrip ini —
+# mereka menyetel path-nya sendiri sebelum mengimpor modul.
+jalankan uji-waktu-status.mjs  /tmp/refactor-waktu.db
+jalankan uji-http-waktu-status.mjs /tmp/refactor-waktu-http.db
+# Sisi TAMPILAN: cara catatan waktu disusun jadi baris di panel. Terpisah dari
+# uji backend di atas karena keduanya bisa rusak sendiri-sendiri — backend bisa
+# benar sementara tampilannya menyesatkan. Skrip ini mentranspile berkas .tsx
+# panel sendiri, jadi tidak memakai DATABASE_PATH.
+jalankan uji-util-waktu-panel.mjs /tmp/refactor-waktu-panel.db
 
 echo "═══════════════════════════════════════════════════════════"
 echo "  RINGKASAN: $lulus lulus, $gagal gagal"

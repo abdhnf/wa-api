@@ -45,6 +45,7 @@ import {
  apiGetUserLogs,
  getStoredUser
 } from '../api';
+import { susunBarisWaktu, JamStatus } from '../lib/messageStatus';
 
 interface UserItem {
  id: string;
@@ -85,13 +86,28 @@ const fmtWaktu = (iso?: string) => {
 };
 
 const LABEL_STATUS_PESAN: Record<string, string> = {
+  pending: 'Menunggu',
   queued: 'Menunggu',
+  pacing: 'Jeda Anti-Ban',
   sending: 'Dikirim',
   sent: 'Terkirim',
   delivered: 'Diterima',
   read: 'Dibaca',
   failed: 'Gagal',
+  invalid_number: 'Nomor Tidak Valid',
+  not_registered: 'Tidak Terdaftar di WA',
+  cancelled: 'Dibatalkan',
 };
+
+/**
+ * Status yang berarti pesan TIDAK sampai — dipakai untuk memilih ikon.
+ *
+ * Sebelumnya hanya `failed` yang dicek, sehingga `invalid_number`,
+ * `not_registered`, dan `cancelled` tampil dengan centang hijau: pesan yang
+ * gagal terlihat berhasil saat operator memindai daftar. Daftarnya sejalan
+ * dengan `FORCED_STATUSES` di backend (`src/db/pesan.ts`).
+ */
+const STATUS_TIDAK_SUKSES = new Set(['failed', 'invalid_number', 'not_registered', 'cancelled']);
 
 interface UsersPageProps {
  onNotify?: (msg: string, type?: 'success' | 'error' | 'info') => void;
@@ -385,6 +401,17 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
  const googleUsers = users.filter((u) => u.authProvider === 'google').length;
  const activeUsers = users.filter((u) => u.status === 'active').length;
  const totalWeeklySent = users.reduce((acc, u) => acc + (u.usedInPeriod ?? u.usedThisWeek ?? 0), 0);
+
+ /**
+  * Rincian waktu per tahap untuk pesan yang sedang dibuka di modal.
+  *
+  * Dihitung di sini, bukan di dalam JSX, supaya tidak dihitung ulang setiap
+  * render. Array kosong berarti pesan itu dibuat sebelum fitur pencatatan waktu
+  * ada — modal menampilkan keterangan apa adanya, TIDAK mengarang waktu dari
+  * `created_at`, karena itu akan menampilkan satu waktu yang sama untuk semua
+  * tahap dan terbaca seolah pesan selesai seketika.
+  */
+ const barisWaktuPesan = selectedMsg ? susunBarisWaktu(selectedMsg.statusTimes) : [];
 
  return (
  <div className="space-y-5 sm:space-y-6">
@@ -1244,7 +1271,7 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
                     <th className="py-2.5 px-3">Tujuan</th>
                     <th className="py-2.5 px-3">Isi</th>
                     <th className="py-2.5 px-3">Status</th>
-                    <th className="py-2.5 px-3">Waktu</th>
+                    <th className="py-2.5 px-3">Masuk Antrean</th>
                     <th className="py-2.5 px-3 text-right">Detail</th>
                   </tr>
                 </thead>
@@ -1256,16 +1283,19 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
                         {m.text || m.caption || (m.mediaType ? `[${m.mediaType}]` : '—')}
                       </td>
                       <td className="py-2.5 px-3">
-                        <span className="inline-flex items-center gap-1">
-                          {m.status === 'failed' ? (
-                            <XCircle size={12} className="text-clay" />
-                          ) : m.status === 'queued' ? (
-                            <Clock size={12} className="text-honey" />
-                          ) : (
-                            <CheckCircle2 size={12} className="text-sea" />
-                          )}
-                          {LABEL_STATUS_PESAN[m.status] || m.status}
-                        </span>
+                        <div className="inline-flex flex-col items-start gap-0.5">
+                          <span className="inline-flex items-center gap-1">
+                            {STATUS_TIDAK_SUKSES.has(m.status) ? (
+                              <XCircle size={12} className="text-clay" />
+                            ) : m.status === 'queued' || m.status === 'pending' ? (
+                              <Clock size={12} className="text-honey" />
+                            ) : (
+                              <CheckCircle2 size={12} className="text-sea" />
+                            )}
+                            {LABEL_STATUS_PESAN[m.status] || m.status}
+                          </span>
+                          <JamStatus status={m.status} statusTimes={m.statusTimes} />
+                        </div>
                       </td>
                       <td className="py-2.5 px-3 text-ink-muted whitespace-nowrap">{fmtWaktu(m.timestamp)}</td>
                       <td className="py-2.5 px-3 text-right">
@@ -1372,6 +1402,28 @@ export const UsersPage: React.FC<UsersPageProps> = ({ onNotify }) => {
             </div>
           ) : null
         )}
+
+        {/* Rincian waktu per tahap. `Waktu` di atas tetap waktu masuk antrean
+            (`created_at`) supaya tabel dan modal menunjuk angka yang sama;
+            blok ini yang menjawab "tiap tahap kapan". */}
+        <div className="pt-3 border-t border-line">
+          <p className="text-xs text-ink-muted mb-2">Waktu tiap tahap</p>
+          {barisWaktuPesan.length > 0 ? (
+            <div className="space-y-1.5">
+              {barisWaktuPesan.map((b) => (
+                <div key={b.status} className="grid grid-cols-[130px_1fr_92px] gap-3 text-xs items-baseline">
+                  <span className="text-ink-muted">{b.tahap}</span>
+                  <span className="text-ink-soft font-mono">{b.jam}</span>
+                  <span className="text-ink-faint font-mono text-[11px] text-right">{b.selisih ?? '—'}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-ink-faint">
+              Tidak ada catatan waktu per tahap untuk pesan ini. Pencatatan baru aktif untuk pesan yang dikirim setelah fitur ini dipasang.
+            </p>
+          )}
+        </div>
 
         {(selectedMsg.text || selectedMsg.caption) && (
           <div className="pt-2 border-t border-line">

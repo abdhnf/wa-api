@@ -47,6 +47,11 @@ export interface QueueItem {
   remainingDelayMs?: number;
   timestamp: string;
   isBulk?: boolean;
+  /**
+   * Waktu kejadian per status, epoch milidetik — dari `statusTimes` di payload
+   * backend. Kosong untuk pesan yang dibuat sebelum fitur ini ada.
+   */
+  statusTimes?: Partial<Record<string, number>>;
 }
 
 export interface AntiBanConfig {

@@ -4,7 +4,7 @@ import {
   XCircle, Search, Filter, ChevronLeft, ChevronRight, Loader2,
   Users, Smartphone, Layers, AlertCircle, Trash2, CheckCheck
 } from 'lucide-react';
-import { MessageStatusBadge } from '../lib/messageStatus';
+import { MessageStatusBadge, JamStatus } from '../lib/messageStatus';
 import { type Session, type QueueItem } from '../dummyData';
 import {
   apiGetSessionMessages,
@@ -134,8 +134,13 @@ export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({ sessions
 
   // Badge status memakai sumber bersama; sebelumnya `default` melabeli
   // setiap status tak dikenal sebagai "Gagal".
-  const getStatusBadge = (status: string) => (
-    <MessageStatusBadge status={status} iconSize={11} compact />
+  // Jam status terkini ditulis di bawah badge agar bisa dibandingkan antar baris
+  // tanpa membuka tooltip; rincian tiap tahap tetap ada di tooltip badge.
+  const getStatusBadge = (status: string, statusTimes?: Record<string, number>) => (
+    <div className="inline-flex flex-col items-start gap-0.5">
+      <MessageStatusBadge status={status} iconSize={11} compact statusTimes={statusTimes} />
+      <JamStatus status={status} statusTimes={statusTimes} />
+    </div>
   );
 
   return (
@@ -365,7 +370,7 @@ export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({ sessions
             <table className="w-full text-left text-xs min-w-[800px]">
               <thead className="bg-surface-sunken text-ink-muted uppercase tracking-wider text-[10px] font-semibold border-b border-line">
                 <tr>
-                  <th className="px-3.5 py-2.5">Waktu</th>
+                  <th className="px-3.5 py-2.5">Masuk Antrean</th>
                   <th className="px-3.5 py-2.5">Sesi Pengirim</th>
                   <th className="px-3.5 py-2.5">Penerima</th>
                   <th className="px-3.5 py-2.5">Batch Blast</th>
@@ -424,7 +429,7 @@ export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({ sessions
                         {m.jitterDelayMs ? `${(m.jitterDelayMs / 1000).toFixed(1)}s` : '-'}
                       </td>
                       <td className="px-3.5 py-2.5 whitespace-nowrap">
-                        {getStatusBadge(m.status)}
+                        {getStatusBadge(m.status, m.statusTimes)}
                       </td>
                       <td className="px-3.5 py-2.5 text-right whitespace-nowrap">
                         {hasBatch ? (

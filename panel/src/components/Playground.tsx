@@ -10,6 +10,7 @@ import {
   apiGetSessions, apiGetSessionMessages, apiGetAutoRotateStatus
 } from '../api';
 import { Toast } from './Toast';
+import { JamStatus } from '../lib/messageStatus';
 import waChatDoodle from '../assets/wa-chat-doodle.png';
 
 type PlaygroundMode = 'text' | 'media' | 'location' | 'bulk';
@@ -20,9 +21,14 @@ interface MessageLog {
   mode: string;
   status: 'pending' | 'pacing' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'invalid_number' | 'not_registered' | 'cancelled';
   errorDetail?: string;
- delay: string;
- timestamp: string;
- detail?: string;
+  delay: string;
+  timestamp: string;
+  detail?: string;
+  /**
+   * Waktu kejadian per status, epoch milidetik — dari `statusTimes` di payload
+   * pesan. Tanpa ini jam status terkini tidak bisa ditampilkan (pesan lama).
+   */
+  statusTimes?: Partial<Record<string, number>>;
 }
 
 const COMMON_EMOJIS = ['👍', '👋', '🔥', '✅', '⚠️', '🎉', '🚀', '💡', '🤖', '📱', '💬', '🕒', '❤️', '🙏', '💯', '✨'];
@@ -172,6 +178,7 @@ export const Playground: React.FC = () => {
          delay: `${(m.jitterDelayMs / 1000).toFixed(1)}s`,
          timestamp: new Date(m.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
          detail: m.text || m.fileName || m.name || m.mode,
+         statusTimes: m.statusTimes,
        }));
        setLogs(mapped);
        setHistoryTotal(Number(res.total) || 0);
@@ -1067,7 +1074,7 @@ export const Playground: React.FC = () => {
  <table className="w-full text-left text-xs text-ink-soft min-w-[640px]">
  <thead className="bg-surface-sunken text-ink-muted uppercase tracking-wider text-[10px] font-semibold border-b border-line">
  <tr>
- <th className="p-3.5">Waktu</th>
+ <th className="p-3.5">Masuk Antrean</th>
  <th className="p-3.5">Tujuan</th>
  <th className="p-3.5">Mode / Detail</th>
  <th className="p-3.5">Delay Pacing</th>
@@ -1094,7 +1101,8 @@ export const Playground: React.FC = () => {
  </td>
  <td className="p-3.5 font-mono text-ink-muted">{log.delay}</td>
  <td className="p-3.5 whitespace-nowrap">
- {log.status === 'delivered' ? (
+   <div className="inline-flex flex-col items-start gap-0.5">
+   {log.status === 'delivered' ? (
    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-semibold bg-pine-wash/60 text-pine border border-pine-line/50">
      <CheckCircle2 className="w-3.5 h-3.5" /> Sampai (Delivered)
    </span>
@@ -1135,6 +1143,8 @@ export const Playground: React.FC = () => {
      <Clock className="w-3.5 h-3.5" /> Antrean Gateway (Pending)
    </span>
  )}
+   <JamStatus status={log.status} statusTimes={log.statusTimes} />
+   </div>
  </td>
  </tr>
  ))
