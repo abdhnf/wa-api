@@ -6,6 +6,34 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
+## [Unreleased] — rancangan menu MCP di panel
+
+`docs/rancangan-menu-mcp.md` — rancangan, belum ada kode.
+
+Temuan yang mengubah bentuknya: **`ApiLogsPage.tsx` belum menampilkan satu pun
+kolom audit.** Server sudah menyimpan `actor`, `target_type`, `target_id`,
+`params`, `params_before`, dan `audit` sejak `f32f814` dan `8d8ce74`, tetapi
+`ApiLogItem` tidak punya keenam field itu dan tabelnya hanya menampilkan method,
+endpoint, status, latency, IP, user, dan waktu. Jadi menu MCP terutama membuka
+data yang sudah ada, bukan menampilkan data baru.
+
+Tiga hal yang sengaja tidak dirancang, karena akan menjadi kontrol yang tidak
+mengontrol apa pun:
+
+- **Registrasi klien MCP dari panel.** MCP dikonfigurasi di komputer pengguna,
+  bukan di server; panel tidak punya cara "mendaftarkan" klien.
+- **Tombol "nonaktifkan MCP".** Tidak ada konsep scope per kunci — API key =
+  seluruh hak pemiliknya. Tombol itu akan berbohong.
+- **Pembatasan tool per agen.** Daftar putih saat ini hidup di proses MCP, bukan
+  di wa-api; panel yang menampilkan centang tool tidak menegakkan apa pun.
+
+Satu koreksi faktual terhadap draf pertama: index untuk query aktivitas **sudah
+ada** (`idx_api_logs_actor_time`, partial pada `actor IS NOT NULL`), jadi tidak
+perlu index baru — dan filter `actor IS NOT NULL` harus ditulis apa adanya, sebab
+`COALESCE(actor,'')` akan mematikan pemakaian index parsial itu.
+
+---
+
 ## [Unreleased] — tiga celah bukti audit
 
 `api_logs` sudah menyimpan siapa, menyentuh apa, dan dengan nilai apa. Tiga hal

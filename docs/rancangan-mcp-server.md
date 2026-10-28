@@ -656,25 +656,21 @@ dan audit diambil dari permintaan itu sendiri (bukan tabel `mcp_audit`).
 
 Yang masih terbuka:
 
-1. **Retensi `api_logs`.** Sekarang tidak ada pembersihan otomatis; yang ada
-   hanya endpoint manual `POST /api-logs/clear` dengan `olderThanDays`. Dengan
-   GET agen ikut tercatat, volumenya naik — perlu ditetapkan batas (mis. 90
-   hari) sebelum MCP dipakai rutin. `antiban_decisions` memakai 30 hari, tetapi
-   audit permintaan biasanya disimpan lebih lama.
-2. **Apakah `params` perlu menyimpan nilai sebelum aksi?** Untuk menjawab "preset
-   diubah dari apa ke apa", `params` saja tidak cukup — ia hanya memuat nilai
-   baru. Pilihan: (a) biarkan, dan jawab "ke apa" saja; (b) tambah kolom
-   `params_before` yang diisi handler. Opsi (b) lebih lengkap tetapi menyentuh
-   setiap handler tulis.
-3. **Apakah GET ber-`X-MCP-Actor` perlu dibatasi?** Tanpa batas, satu agen bisa
-   membanjiri `api_logs` dengan pembacaan berulang. Opsi: batasi satu baris per
-   (actor, endpoint, target) per menit, atau biarkan dan andalkan retensi.
-4. **Baris audit bisa dihapus oleh yang diaudit.** `DELETE /api-logs` dan
-   `POST /api-logs/clear` hanya memakai `requireAuth`; non-admin boleh menghapus
-   log miliknya sendiri. Selama `api_logs` hanya catatan galat itu wajar, tetapi
-   sebagai bukti audit ia cacat: pihak yang diaudit bisa menghapus jejaknya.
-   **Belum diperbaiki** karena panel (`ApiLogsPage.tsx`) menampilkan tombol hapus
-   untuk semua peran — mengubahnya menjadi admin-only akan memunculkan 403 di UI
-   yang sekarang dipakai. Perlu keputusan tersendiri; alternatifnya kolom
-   penanda `audit` yang membuat baris audit tidak bisa dihapus siapa pun kecuali
-   admin, sementara log galat biasa tetap bisa dibersihkan pemiliknya.
+**Sudah ditutup di `8d8ce74`:** butir 1, 2, dan 4 di bawah.
+
+1. ~~**Retensi `api_logs`.**~~ Dijalankan server (`backend/src/retensi.ts`),
+   sekali sehari: audit 90 hari, galat biasa 30 hari. Dua ambang, bukan satu.
+   Harus di server karena `POST /api-logs/clear` tidak bisa menghapus baris audit
+   — kalau bisa, pihak yang diaudit dapat menghapus jejaknya sendiri.
+2. ~~**Nilai sebelum aksi.**~~ Kolom `params_before`, diisi handler lewat
+   `catatNilaiSebelum()`. Sengaja tidak diisi hook `onResponse`: server tidak
+   tahu keadaan sebelum handler berjalan. Baru dipasang di
+   `PUT /sessions/:id/antiban`; endpoint tulis lain belum — handler yang
+   mengisinya harus membaca nilai lama lebih dulu, dan tidak semua melakukannya.
+3. **Apakah GET ber-`X-MCP-Actor` perlu dibatasi?** Belum. Tanpa batas, satu agen
+   bisa membanjiri `api_logs` dengan pembacaan berulang. Retensi membatasi
+   pertumbuhannya, bukan lajunya.
+4. ~~**Baris audit bisa dihapus oleh yang diaudit.**~~ Kolom `audit` + penyaringan
+   di `deleteApiLogs`/`clearApiLogs`. Non-admin tetap bisa menghapus catatan
+   galat biasa (tombol di panel tidak berubah menjadi 403), tetapi tidak baris
+   audit. Respons melaporkan jumlah yang dilewati, tidak didiamkan.
