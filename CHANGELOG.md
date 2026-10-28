@@ -6,6 +6,54 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
+## [Unreleased] — Pencatatan guard warm-up & penolakan seluruh sesi
+
+Dua cacat pada instrumentasi decision log yang **tidak memunculkan error** dan
+tidak tertangkap uji regex mana pun — keduanya ditemukan lewat probe yang
+menghitung baris pada database sungguhan.
+
+### Fixed
+
+- **Guard warm-up tercatat di tempat yang salah** (`backend/src/session-manager.ts`).
+  Pencatatan berada di dalam `checkHealth()`, yang sebenarnya fungsi **seleksi
+  sesi**, bukan jalur kirim. Akibatnya salah pada dua kondisi sekaligus: dengan
+  autorotate aktif dan tiga sesi kandidat, satu pengiriman menghasilkan **3 baris**
+  `warmup` tanpa `message_id` (satu per kandidat); dengan autorotate mati —
+  instalasi satu sesi, setup paling umum — guard ini **tidak pernah tercatat sama
+  sekali**, padahal justru di sesi baru warm-up paling mungkin menahan. Kini
+  dicatat lewat `catatWarmup()` di `resolveSession()`, dipanggil dari tiga jalur
+  yang memilih sesi (satu-sesi, sticky session, rotasi). Hasil probe: **1 baris
+  per pengiriman** pada kedua kondisi.
+- **Penolakan seluruh sesi tidak tercatat sama sekali.** Ketika semua kandidat
+  ditolak `checkHealth()`, `resolveSession()` mengembalikan sesi dengan alasan
+  "semua sesi sedang limit" tanpa satu baris pun di decision log — padahal inilah
+  kasus yang paling perlu ditelusuri, karena pesan benar-benar tertahan. Kini
+  dicatat **satu baris** `sessionHealth` berisi rincian penolakan tiap sesi di
+  `metrics`, sehingga tidak mengulang masalah duplikasi seperti pada warm-up.
+
+### Added
+
+- **`scripts/uji-rasio-keputusan.mjs`** — mengukur jumlah baris per percobaan
+  kirim pada tiga kondisi (autorotate mati, aktif dengan tiga kandidat, dan tiga
+  panggilan berurutan). Inilah yang membuktikan cacat di atas dengan angka.
+- **`scripts/uji-session-health-block.mjs`** — memaksa kuota warm-up kedua sesi
+  habis, lalu memastikan penolakan seluruh sesi tercatat tepat satu baris
+  `sessionHealth` beserta rinciannya.
+- **4 asersi regresi** di `uji-decision-log-integrasi.mjs` (total 22) yang
+  memastikan pencatatan tidak kembali ke dalam `checkHealth()` dan
+  `catatWarmup()` tetap dipanggil di ketiga jalur pemilihan sesi.
+
+### Notes
+
+- **Baris `warmup` tetap tanpa `message_id`.** `resolveSession()` dipanggil
+  sebelum pesan dibuat, jadi pengaitan ke satu pesan belum mungkin tanpa
+  mengubah urutan alur. Analisis per penerima tetap bisa dilakukan lewat
+  `recipient_hash` + `created_at`.
+- **Volume terukur:** 6 baris per percobaan kirim, sekitar **12.000 baris/bulan**
+  (±4,6 MB) pada beban 56 pesan/hari, dengan retensi 30 hari.
+
+---
+
 ## [Unreleased] — Perbaikan normalisasi nomor & IP privat di nilai bawaan
 
 Dua bug yang ditemukan saat menulis uji untuk decision log. Keduanya berjenis
@@ -69,8 +117,10 @@ ada, dicatat per evaluasi.
 - **Tabel `antiban_decisions`** (`backend/src/db/skema.ts`) — satu baris per
   evaluasi guard, bukan per pesan. Satu pesan bisa dievaluasi berkali-kali
   (setiap antrean bangun); menyimpannya sebagai kolom di `messages` akan
-  menimpa riwayat percobaan sebelumnya. Tiga index: per sesi+waktu, per
-  guard+waktu, dan per `message_id` untuk menjawab "kenapa pesan ini tertahan".
+  menimpa riwayat percobaan sebelumnya. Empat index: per sesi+waktu, per
+  guard+keputusan+waktu, per `message_id` (parsial), dan per `batch_id`
+  (parsial) — dua terakhir parsial karena guard level sesi memang tanpa
+  `message_id`.
 - **Modul `backend/src/db/decision-log.ts`** — `recordGuardDecision`,
   `hashRecipient`, `evaluateGuard`, `summarizeDecisions`, `listDecisions`,
   `pruneDecisions`. Murni SQL, tanpa impor domain, supaya bisa diuji tanpa
@@ -79,19 +129,21 @@ ada, dicatat per evaluasi.
   (`getSessionAntiBanPreset`). Preset ikut dicatat karena `allow` pada
   `broadcast` berarti hal yang berbeda dari `allow` pada `strict`: yang kedua
   "diperiksa dan aman", yang pertama bisa berarti "guard-nya dimatikan".
-- **Instrumentasi enam guard** (`backend/src/session-manager.ts`): `recovery`,
-  `timelock`, `replyRatio`, `contactGraph`, `rateLimiter`, `warmup`. Keputusan
-  `allow` **dan** `block` sama-sama dicatat — guard yang menahan sudah memanggil
-  `console.warn`, yang meloloskan tidak, sehingga tanpa mencatat `allow` tidak
-  ada cara mengukur seberapa dekat pengiriman ke ambang batas.
+- **Instrumentasi tujuh guard** (`backend/src/session-manager.ts`): `recovery`,
+  `timelock`, `replyRatio`, `contactGraph`, `rateLimiter`, `warmup`, dan
+  `sessionHealth`. Keputusan `allow` **dan** `block` sama-sama dicatat — guard
+  yang menahan sudah memanggil `console.warn`, yang meloloskan tidak, sehingga
+  tanpa mencatat `allow` tidak ada cara mengukur seberapa dekat pengiriman ke
+  ambang batas.
 - **Dua endpoint baca** (`backend/src/routes/operasional.ts`):
   `GET /api/v1/antiban/decisions/summary` dan `GET /api/v1/antiban/decisions`
   (paginasi + filter guard/decision/batch/sesi/waktu). Non-admin hanya bisa
   membaca sesi miliknya; tanpa `sessionId` mendapat `400`. Tidak ada endpoint
   tulis — decision log hanya diisi jalur pengiriman.
-- **Enam skrip verifikasi** di `backend/scripts/`, semuanya memakai database
-  sementara di `/tmp`: unit (30 asersi), integrasi (15 asersi), boot, E2E HTTP,
-  migrasi pada salinan DB, dan fixture seed.
+- **Tujuh skrip verifikasi** di `backend/scripts/`, semuanya memakai database
+  sementara di `/tmp`: unit (39 asersi), integrasi (22 asersi), rasio keputusan,
+  penolakan seluruh sesi, boot, E2E HTTP (63 asersi), migrasi pada salinan DB,
+  plus fixture seed.
 
 ### Notes
 

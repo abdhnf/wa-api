@@ -97,7 +97,7 @@ Alasan tabel terpisah sudah dijelaskan di §2.1. Skema:
 |---|---|
 | `id` | autoincrement |
 | `session_id` | sesi yang mengevaluasi |
-| `guard` | `recovery` / `replyRatio` / `contactGraph` / `timelock` / `rateLimiter` / `warmup` |
+| `guard` | `recovery` / `replyRatio` / `contactGraph` / `timelock` / `rateLimiter` / `warmup` / `sessionHealth` |
 | `decision` | `allow` / `block` / `warn` |
 | `reason` | kalimat yang bisa dibaca manusia |
 | `message_id` | pesan yang dievaluasi (boleh null untuk guard level sesi) |
@@ -108,8 +108,11 @@ Alasan tabel terpisah sudah dijelaskan di §2.1. Skema:
 | `preset` | preset anti-ban aktif |
 | `created_at` | waktu evaluasi |
 
-Tiga index: `(session_id, created_at)`, `(guard, created_at)`, `(message_id)`.
-Index ketiga dipakai untuk menjawab "kenapa pesan ini tertahan".
+Empat index: `(session_id, created_at)`, `(guard, decision, created_at)`,
+`(message_id)` parsial, dan `(batch_id)` parsial. Index ketiga dipakai untuk
+menjawab "kenapa pesan ini tertahan"; dua index terakhir parsial (`WHERE ... IS
+NOT NULL`) karena sebagian besar baris guard level sesi memang tanpa `message_id`
+maupun `batch_id`.
 
 `metrics` dan `threshold` disimpan sebagai JSON, bukan kolom terpisah: tiap
 guard punya angka yang berbeda (`lastHour`/`maxPerHour` untuk rate limiter,
@@ -125,7 +128,8 @@ kolom akan memaksa kolom null di mana-mana.
 | `replyRatio` | sama | rasio balasan saat itu |
 | `contactGraph` | sama | penerima dikenal/tidak, jumlah kontak dikenal |
 | `rateLimiter` | setelah `getDelayReason` | jeda + pemakaian kuota jam/hari |
-| `warmup` | `checkHealth()` | fase warm-up, terkirim hari ini vs batas |
+| `warmup` | `resolveSession()` → `catatWarmup()` | fase warm-up, terkirim hari ini vs batas |
+| `sessionHealth` | `resolveSession()` saat semua kandidat ditolak | sesi mana ditolak dan alasannya |
 
 Guard `rateLimiter` dicatat dengan format alasan yang memuat **pemakaian kuota**
 (`12/300 per jam, 40/1500 per hari`), bukan hanya "lolos". Tanpa angka itu,
@@ -203,31 +207,38 @@ konteks sesi) disengaja: modul SQL bisa diuji tanpa memuat seluruh
 
 ## 6. Cara verifikasi
 
-Enam skrip di `backend/scripts/`, semuanya memakai database sementara di
+Sembilan skrip di `backend/scripts/`, semuanya memakai database sementara di
 `/tmp` — bukan database produksi:
 
 | Skrip | Membuktikan |
 |---|---|
 | `uji-decision-log.mjs` | tabel, insert, hash, summary, list, paginasi, retensi |
-| `uji-decision-log-integrasi.mjs` | tiap guard di source benar-benar memanggil pencatatan |
+| `uji-decision-log-integrasi.mjs` | tiap guard di source benar-benar memanggil pencatatan; warm-up dicatat sekali per kirim, bukan per kandidat |
+| `uji-rasio-keputusan.mjs` | rasio baris per percobaan kirim pada tiga kondisi (autorotate mati, aktif, berurutan) |
+| `uji-session-health-block.mjs` | penolakan seluruh sesi kandidat tetap tercatat, dengan rincian per sesi |
+| `uji-normalisasi-nomor.mjs` | normalisasi nomor telepon, termasuk awalan `00` dan format JID |
 | `uji-decision-log-boot.sh` | server hidup dengan DB kosong; tabel & index terbentuk; route audit terdaftar |
 | `uji-decision-log-e2e.sh` | alur penuh lewat HTTP: auth, tulis, baca, filter, isolasi tenant, read-only |
 | `uji-decision-log-migrasi.mjs` | migrasi aman pada **salinan** DB berisi data |
-| `seed-decision-log-e2e.mjs` | fixture untuk uji E2E |
+| `seed-decision-log-e2e.mjs` | fixture untuk uji E2E (dijalankan otomatis oleh `uji-decision-log-e2e.sh`) |
 
 Jalankan dari `backend/`:
 
 ```bash
 node scripts/uji-decision-log.mjs
 node scripts/uji-decision-log-integrasi.mjs
+node scripts/uji-rasio-keputusan.mjs
+node scripts/uji-session-health-block.mjs
+node scripts/uji-normalisasi-nomor.mjs
 bash scripts/uji-decision-log-boot.sh
 bash scripts/uji-decision-log-e2e.sh
 node scripts/uji-decision-log-migrasi.mjs /path/ke/salinan.db
 ```
 
-Hasil yang diharapkan pada versi ini: **30 + 15 asersi lulus**, E2E mengembalikan
-`200/403/400/401` untuk empat skenario isolasi tenant, dan `404` untuk semua
-percobaan tulis.
+Hasil yang diharapkan pada versi ini: **39 + 22 + 28 asersi lulus**, rasio
+**1,0 baris per panggilan** pada ketiga kondisi, penolakan seluruh sesi tercatat
+tepat 1 baris `sessionHealth`, E2E mengembalikan `200/403/400/401` untuk empat
+skenario isolasi tenant, dan `404` untuk semua percobaan tulis.
 
 ---
 
@@ -248,7 +259,31 @@ Sengaja di luar cakupan Langkah 1:
 
 ---
 
-## 8. Gap yang masih terbuka
+## 8. Volume data
+
+Perkiraan dari beban produksi nyata (56 pesan/hari pada sesi tersibuk), bukan
+angka karangan:
+
+| Komponen | Baris per percobaan kirim |
+|---|---|
+| `warmup` (satu kali, di `resolveSession()`) | 1 |
+| `recovery` | 1 |
+| `timelock` | 1 |
+| `replyRatio` | 1 |
+| `contactGraph` | 1 |
+| `rateLimiter` | 1 |
+| **Total** | **6** |
+
+Dengan faktor retry 1,2: sekitar **12.000 baris/bulan**, atau **±4,6 MB/bulan**
+(estimasi 400 byte/baris). Retensi default 30 hari (`pruneDecisions`) menjaga
+tabel tetap di kisaran itu.
+
+Angka ini yang membuat desain "satu baris per guard per percobaan" layak.
+Sebelum perbaikan, guard `warmup` bisa menghasilkan 3 baris per pengiriman saat
+autorotate aktif dan **0 baris** saat autorotate mati — jadi biayanya tidak
+sebanding dengan manfaatnya.
+
+## 9. Gap yang masih terbuka
 
 Dicatat jujur supaya tidak dikira sudah tertutup:
 
@@ -263,3 +298,16 @@ Dicatat jujur supaya tidak dikira sudah tertutup:
    tapi tidak memperbaikinya.
 3. **Belum ada data historis.** Tabel mulai kosong. Analisis tren butuh waktu
    pengumpulan; keputusan berbasis data tidak bisa diambil dari tabel kosong.
+4. **Baris `warmup` tidak terikat `messageId`.** `resolveSession()` dipanggil
+   sebelum pesan dibuat (lihat `routes/pesan.ts`), jadi guard warm-up tercatat
+   dengan `recipientHash` tetapi tanpa `message_id`. Untuk mengaitkannya ke satu
+   pesan perlu meneruskan id pesan ke `resolveSession()` — perubahan urutan alur
+   yang tidak dilakukan di Langkah 1. Analisis per penerima tetap bisa dilakukan
+   lewat `recipient_hash` + `created_at`.
+5. **Penolakan `timelock` di `checkHealth()` tetap tidak tercatat sebagai
+   `timelock`.** Saat semua kandidat ditolak, alasannya tercatat — tetapi sebagai
+   satu baris `sessionHealth` dengan rincian di `metrics`, bukan satu baris
+   `timelock` per sesi. Jadi `GET /decisions?guard=timelock` tidak akan
+   menampilkan penolakan pada tahap pemilihan sesi. Ini konsekuensi desain
+   "satu baris per pemanggilan" yang mencegah duplikasi; memisahkannya butuh
+   desain pencatatan per kandidat tersendiri.

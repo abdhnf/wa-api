@@ -44,6 +44,25 @@ check('evaluateGuard dipakai', (src.match(/evaluateGuard\(/g) || []).length >= 4
 check('recordGuardDecision dipakai', (src.match(/recordGuardDecision\(/g) || []).length >= 2,
   `${(src.match(/recordGuardDecision\(/g) || []).length} pemanggilan`);
 
+console.log('\n=== 1b. Regresi: warm-up dicatat SEKALI per kirim, bukan per kandidat ===');
+// Probe membuktikan bug ini nyata: saat pencatatan berada di dalam checkHealth(),
+// satu pengiriman dengan 3 sesi kandidat menghasilkan 3 baris `warmup` tanpa
+// messageId, dan instalasi satu sesi menghasilkan 0 baris.
+check('pencatatan warmup TIDAK di dalam checkHealth',
+  !/const checkHealth[\s\S]{0,2500}?recordGuardDecision\(\{[\s\S]{0,400}?guard: 'warmup'/.test(src),
+  'recordGuardDecision guard warmup masih berada di dalam checkHealth');
+check('helper catatWarmup ada', /private catatWarmup\(/.test(src));
+check('catatWarmup dipanggil di jalur satu-sesi (autorotate mati)',
+  /if \(\(!enabled \|\| accessibleSessions\.length < 2\) && requestedId !== 'auto'\) \{[\s\S]{0,300}?this\.catatWarmup\(/.test(src));
+check('catatWarmup dipanggil di jalur rotasi',
+  /healthyCandidates\.length\);\s*\n\s*return \{\s*\n\s*sessionId: chosenId/.test(src));
+check('catatWarmup dipanggil di jalur sticky session',
+  /const stickyHealth = checkHealth\(lastSessId\);[\s\S]{0,600}?this\.catatWarmup\(lastSessId/.test(src));
+check('penolakan seluruh sesi dicatat (guard sessionHealth)',
+  /healthyCandidates\.length === 0\)[\s\S]{0,1200}?guard: 'sessionHealth'[\s\S]{0,200}?decision: 'block'/.test(src));
+check('penolakan seluruh sesi menyimpan rincian per sesi di metrics',
+  /guard: 'sessionHealth'[\s\S]{0,900}?penolakan:/.test(src));
+
 console.log('\n=== 2. Pencatatan MENDAHULUI cabang blokir (urutan penting) ===');
 // Kalau pencatatan diletakkan SETELAH `if (!blocked)`, guard yang memblokir
 // tidak akan pernah tercatat. Pastikan evaluateGuard ada di dalam blok, bukan sesudahnya.

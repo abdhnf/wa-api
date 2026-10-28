@@ -753,28 +753,18 @@ export class SessionManager {
 
       const ab = this.getAntiBan(sessId);
       const warmupStatus = ab.warmup.getStatus();
-      // Kuota warm-up juga guard, dan dulu kegagalannya hanya terlihat sebagai
-      // alasan rotasi sesi — bukan sebagai penolakan pengiriman. Dicatat di sini
-      // supaya "sesi ini tidak mengirim apa pun" bisa dibedakan antara kuota
-      // warm-up habis, socket mati, atau timelock.
+      // Kuota warm-up juga menahan pengiriman, tapi ia diperiksa di sini —
+      // fungsi SELEKSI SESI — bukan di jalur kirim. Pencatatannya sengaja TIDAK
+      // di dalam fungsi ini; lihat resolveSession() langkah 7.
+      //
+      // Alasannya terbukti lewat probe, bukan dugaan: dengan autorotate aktif
+      // dan 3 sesi kandidat, checkHealth() dipanggil untuk tiap kandidat
+      // sehingga satu pengiriman menghasilkan 3 baris `warmup` tanpa
+      // `messageId`. Dengan autorotate mati — instalasi satu sesi — fungsi ini
+      // tidak pernah dipanggil sama sekali, jadi guard warm-up tidak tercatat
+      // apa pun, padahal di sesi baru justru warm-up yang paling mungkin
+      // menahan. Mencatat di sini salah pada kedua kondisi.
       const warmupAllowed = !(warmupStatus.todayLimit !== -1 && warmupStatus.todaySent >= warmupStatus.todayLimit);
-      recordGuardDecision({
-        sessionId: sessId,
-        guard: 'warmup',
-        decision: warmupAllowed ? 'allow' : 'block',
-        reason: warmupAllowed
-          ? `Kuota warm-up tersisa ${warmupStatus.todayLimit === -1 ? 'tanpa batas' : `${warmupStatus.todayLimit - warmupStatus.todaySent} dari ${warmupStatus.todayLimit}`}`
-          : `Batas harian warm-up (${warmupStatus.todaySent}/${warmupStatus.todayLimit}) tercapai`,
-        recipientHash: hashRecipient(recipient),
-        preset: getSessionAntiBanPreset(sessId),
-        metrics: {
-          phase: warmupStatus.phase,
-          day: warmupStatus.day,
-          todaySent: warmupStatus.todaySent,
-          todayLimit: warmupStatus.todayLimit,
-        },
-        threshold: { todayLimit: warmupStatus.todayLimit },
-      });
       if (!warmupAllowed) {
         return { healthy: false, reason: `Batas harian warm-up (${warmupStatus.todaySent}/${warmupStatus.todayLimit}) tercapai` };
       }
@@ -789,7 +779,15 @@ export class SessionManager {
     };
 
     // 1. Jika auto-rotate TIDAK aktif (atau user hanya punya < 2 sesi) dan requestedId bukan 'auto':
+    //
+    // Ini jalur PALING UMUM — instalasi satu sesi tidak pernah menyentuh
+    // checkHealth() sama sekali. Dulu guard warm-up hanya dicatat di dalam
+    // checkHealth(), sehingga pada instalasi satu sesi tidak ada satu pun baris
+    // warm-up, padahal justru di sesi baru warm-up yang paling mungkin menahan
+    // pengiriman. Karena itu keputusannya dicatat di sini juga, dengan bentuk
+    // yang sama seperti langkah 7.
     if ((!enabled || accessibleSessions.length < 2) && requestedId !== 'auto') {
+      this.catatWarmup(requestedId, recipient);
       return { sessionId: requestedId, rotated: false };
     }
 
@@ -840,6 +838,10 @@ export class SessionManager {
       if (lastSessId && candidateIds.includes(lastSessId)) {
         const stickyHealth = checkHealth(lastSessId);
         if (stickyHealth.healthy) {
+          // Jalur ketiga yang memilih sesi tanpa melewati langkah 7. Tanpa
+          // pencatatan di sini, pengiriman yang memakai sticky session tidak
+          // menghasilkan baris warm-up sama sekali.
+          this.catatWarmup(lastSessId, recipient);
           return {
             sessionId: lastSessId,
             rotated: lastSessId !== requestedId,
@@ -855,6 +857,39 @@ export class SessionManager {
       .filter((c) => c.healthy) as Array<{ id: string; healthy: true; sess: SessionInfo; ab: any }>;
 
     if (healthyCandidates.length === 0) {
+      // Semua kandidat ditolak — inilah kasus yang PALING perlu tercatat, karena
+      // pesan benar-benar tertahan. Sebelumnya justru di sini decision log kosong
+      // sama sekali: tiap penolakan terjadi di dalam checkHealth() yang tidak
+      // mencatat apa pun, lalu resolveSession() mengembalikan sesi dengan alasan
+      // "semua sesi sedang limit" tanpa jejak guard mana yang menahan.
+      //
+      // Dicatat SATU baris (bukan satu per kandidat) supaya tidak mengulang
+      // masalah duplikasi seperti pada warm-up. Rincian penolakan tiap sesi
+      // disimpan di `metrics`, sehingga tetap bisa ditelusuri tanpa menambah baris.
+      try {
+        const rincian = candidateIds.map((id) => ({ sessionId: id, ...checkHealth(id) }));
+        recordGuardDecision({
+          sessionId: requestedId === 'auto' ? 'auto' : requestedId,
+          guard: 'sessionHealth',
+          decision: 'block',
+          reason: `Tidak ada sesi sehat: ${rincian
+            .map((r) => `${r.sessionId} (${(r as { reason?: string }).reason ?? 'tidak diketahui'})`)
+            .join('; ')}`,
+          recipientHash: hashRecipient(recipient),
+          preset: requestedId === 'auto' ? null : getSessionAntiBanPreset(requestedId),
+          metrics: {
+            jumlahKandidat: candidateIds.length,
+            penolakan: rincian.map((r) => ({
+              sessionId: r.sessionId,
+              reason: (r as { reason?: string }).reason ?? null,
+            })),
+          },
+          threshold: null,
+        });
+      } catch {
+        // Audit tidak boleh menggagalkan pemilihan sesi.
+      }
+
       if (requestedId === 'auto') {
         const fallbackId = accessibleSessions.find((s) => s.status === 'connected')?.id || accessibleSessions[0]?.id;
         if (!fallbackId) {
@@ -880,11 +915,62 @@ export class SessionManager {
     }
 
     const isRotated = chosenId !== requestedId;
+
+    // 7. Catat keputusan guard warm-up untuk sesi yang AKHIRNYA dipilih.
+    //
+    // Hanya di sini, bukan di dalam checkHealth(): checkHealth() dipanggil untuk
+    // tiap kandidat sesi, sehingga satu pengiriman bisa menghasilkan beberapa
+    // baris tanpa messageId. Di sini tepat satu baris per panggilan
+    // resolveSession(), dan recipientHash terisi sehingga barisnya bisa
+    // dikelompokkan per penerima.
+    //
+    // Konsekuensi yang diterima: tabel tidak tahu `messageId` karena
+    // resolveSession() dipanggil SEBELUM pesan dibuat (lihat routes/pesan.ts).
+    // Untuk mengaitkannya, `recipientHash` + `created_at` sudah cukup — dan itu
+    // lebih baik daripada mencatat tiga kali tanpa penerima sama sekali.
+    this.catatWarmup(chosenId, recipient, healthyCandidates.length);
+
     return {
       sessionId: chosenId,
       rotated: isRotated,
       reason: isRotated ? `Auto-rotate aktif (${strategy}) dialihkan ke ${chosenId}` : undefined,
     };
+  }
+
+  /**
+   * Catat keputusan guard warm-up untuk satu penerima.
+   *
+   * Dipisah jadi metode karena dipanggil dari dua jalur `resolveSession()`:
+   * jalur satu-sesi (langkah 1, paling umum) dan jalur rotasi (langkah 7).
+   * Tanpa pemisahan ini, bentuk pencatatannya mudah menyimpang antar jalur.
+   *
+   * Tidak pernah melempar: audit tidak boleh menggagalkan pemilihan sesi.
+   */
+  private catatWarmup(sessionId: string, recipient: string, kandidatDiperiksa?: number): void {
+    try {
+      const ws = this.getAntiBan(sessionId).warmup.getStatus();
+      const sisa = ws.todayLimit === -1 ? null : ws.todayLimit - ws.todaySent;
+      recordGuardDecision({
+        sessionId,
+        guard: 'warmup',
+        decision: 'allow',
+        reason: ws.todayLimit === -1
+          ? 'Kuota warm-up tanpa batas'
+          : `Kuota warm-up tersisa ${sisa} dari ${ws.todayLimit}`,
+        recipientHash: hashRecipient(recipient),
+        preset: getSessionAntiBanPreset(sessionId),
+        metrics: {
+          phase: ws.phase,
+          day: ws.day,
+          todaySent: ws.todaySent,
+          todayLimit: ws.todayLimit,
+          ...(kandidatDiperiksa === undefined ? {} : { kandidatDiperiksa }),
+        },
+        threshold: { todayLimit: ws.todayLimit },
+      });
+    } catch {
+      // Sengaja diam: pencatatan audit tidak boleh menggagalkan pemilihan sesi.
+    }
   }
 
   getAntiBanStatus(sessionId: string) {
@@ -1116,6 +1202,11 @@ export class SessionManager {
         // pesan TIDAK ditandai 'failed' (itu permanen dan menghilangkan pesan dari
         // antrean), melainkan dikembalikan ke depan antrean lalu antrean dijeda
         // sampai waktu blokirnya lewat — lihat scheduleAutoResume().
+        //
+        // Catatan: guard warm-up TIDAK di sini. Ia diperiksa di resolveSession()
+        // saat memilih sesi, sehingga sudah terjadi sebelum pesan mencapai titik
+        // ini. Pencatatannya dilakukan di sana lewat resolveSession() -> lihat
+        // catatan di checkHealth().
         if (!isHighPriority) {
           let blocked: { reason: string; retryInMs: number; needsHandshake?: boolean } | null = null;
 
