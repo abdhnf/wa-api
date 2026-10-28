@@ -6,6 +6,62 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
+## [Unreleased] — server MCP untuk audit & setup terbatas
+
+`mcp/` — proses terpisah, transport stdio, 12 tool (7 baca + 5 tulis yang bisa
+dibalik). Rancangan & alasannya di `docs/rancangan-mcp-server.md`, cara pakai di
+`mcp/README.md`.
+
+Dua keputusan yang menentukan bentuknya:
+
+- **Proses terpisah, bukan in-process.** Kalau MCP berjalan di dalam backend dan
+  crash, seluruh antrean pesan berhenti. Sebagai proses terpisah, kegagalannya
+  terkurung, dan SDK MCP tidak masuk ke proses produksi.
+- **Otorisasi sepenuhnya di wa-api.** MCP hanya meneruskan API key pemiliknya;
+  ia tidak punya pemeriksaan hak sendiri. `403` diteruskan sebagai `403`, tidak
+  ditafsirkan sebagai "tidak ada".
+
+### Added
+
+- `mcp/src/client.ts` — satu jalur untuk semua permintaan, supaya `X-MCP-Actor`
+  tidak mungkin terlupa di satu tool dan bukan di tool lain (tanpa header itu,
+  GET yang berhasil tidak tercatat sebagai bukti audit).
+- `mcp/src/format.ts` — pemformat yang menjawab pertanyaan, bukan membuang JSON
+  mentah. Diukur: `antiban` 3.466 byte, 67%-nya definisi seluruh preset yang
+  tidak ditanyakan; sesudah diformat menjadi ~530 karakter.
+- `mcp/src/tools/baca.ts`, `mcp/src/tools/tulis.ts` — 12 tool.
+- `backend/scripts/uji-mcp.mjs` (37 asersi) — uji lewat JSON-RPC sungguhan.
+- `backend/scripts/ukur-respons-mcp.sh`, `bentuk-respons.sh` — pengukur ukuran
+  respons dan pencetak bentuk JSON, dipakai agar formatter ditulis dari data
+  nyata.
+
+### Catatan pengujian
+
+Uji ini menemukan tiga hal yang tidak terlihat dari membaca kode:
+
+1. **Pemeriksaan kata kunci tidak cukup.** Tool bernama `wa_bersihkan_antrean`
+   yang memanggil `queue/clear` lolos dari filter kata terlarang. Yang
+   menangkapnya adalah perbandingan dengan daftar putih nama tool.
+2. **Asersi "nilai lama dilaporkan" semula terlalu lemah** — ia lulus walau
+   handler tidak membaca nilai lama sama sekali. Diperbaiki agar memeriksa
+   nilainya, bukan hanya ada/tidaknya panah pada pesan.
+3. **Peringatan preset `broadcast` tidak teruji.** Tanpa peringatan itu, angka
+   `replyRatio 0` terbaca sebagai masalah padahal guard-nya memang dimatikan.
+
+Ketiganya ditemukan dengan merusak kode dengan sengaja lalu memastikan uji
+gagal — bukan dengan membaca ulang uji yang hijau.
+
+### Belum dikerjakan
+
+- Retensi `api_logs` otomatis, `params_before`, dan pembatasan `DELETE
+  /api-logs` untuk non-admin (lihat bagian sebelumnya).
+- Pembatasan jumlah panggilan per agen; sekarang masih bergantung pada rate limit
+  per-IP wa-api.
+- `WA_MCP_ACTOR` bisa dipalsukan — diterima, karena ia label dan bukan
+  autentikasi; pelaku tetap diambil dari kunci yang diverifikasi.
+
+---
+
 ## [Unreleased] — isolasi tenant pada rute sesi
 
 Prasyarat untuk server MCP multi-tenant. Selama satu API key bisa menyentuh sesi

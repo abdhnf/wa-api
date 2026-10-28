@@ -505,6 +505,24 @@ dan variabel lingkungan di atas.
 
 ---
 
+### 3.12 Status implementasi
+
+Sudah dikerjakan dan ter-push. Yang berbeda dari rancangan saat dikerjakan:
+
+| Rancangan | Kenyataan | Sebab |
+|---|---|---|
+| `src/index.ts`, `src/client.ts`, `src/tools/*.ts` | ditambah `src/format.ts` | Pemformatan dipakai 7 tool baca; menaruhnya di dalam tiap tool berarti 7 salinan aturan yang sama |
+| `wa_list_messages` tanpa batas bawaan khusus | bawaan `limit` 20, maksimum 100 | Endpoint menerima 200; 30 pesan = 7.485 byte, satu panggilan tanpa batas bisa ~50 KB |
+| Peringatan preset `broadcast` "ditampilkan" | ditambahkan eksplisit di akhir keluaran `wa_audit_antiban` | Tanpa itu, `replyRatio 0` pada preset broadcast terbaca sebagai masalah |
+| Batas tool dijaga "secara desain" | dijaga uji daftar putih | Pemeriksaan kata kunci meloloskan tool bernama netral yang memanggil `queue/clear` — terbukti saat diuji |
+
+Uji: `backend/scripts/uji-mcp.mjs`, 37 asersi, lewat JSON-RPC sungguhan. Tiga
+mutasi sengaja ditanamkan untuk memastikan uji benar-benar menangkap cacat
+(header actor dihapus, nilai lama tidak dibaca, peringatan broadcast dihapus) —
+ketiganya tertangkap.
+
+---
+
 ## 4. Perubahan per berkas
 
 | Berkas | Perubahan |
