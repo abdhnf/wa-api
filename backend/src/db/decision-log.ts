@@ -23,6 +23,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { db } from './client.js';
+import { normalisasiNomor } from '../phone.js';
 
 /** Guard yang keputusannya dicatat. Sengaja string bebas, bukan enum, supaya
  *  penambahan guard baru tidak butuh migrasi skema. */
@@ -65,18 +66,23 @@ const MAX_JSON = 2000;
  * dibandingkan antar baris; ini bukan pengamanan kriptografis, hanya
  * penghilangan PII.
  *
- * Normalisasi awalan WAJIB, bukan kenyamanan: `0812...` dan `62812...` adalah
- * nomor yang sama, dan tanpa penyeragaman keduanya menghasilkan hash berbeda —
- * pengelompokan "berapa pesan ke satu penerima" langsung pecah. Aturannya
- * disamakan dengan `validatePhoneFormat()` di session-manager.
+ * Normalisasi WAJIB, bukan kenyamanan: `0812...`, `62812...`, `+62 812-...`,
+ * dan `62812...@s.whatsapp.net` adalah nomor yang sama. Tanpa penyeragaman
+ * semuanya menghasilkan hash berbeda, dan pengelompokan "berapa pesan ke satu
+ * penerima" pecah tanpa memunculkan error apa pun.
+ *
+ * Bentuk kanonik ditentukan di satu tempat: `normalisasiNomor()` pada
+ * `phone.ts`, yang juga dipakai jalur pengiriman. Dulu fungsi ini punya aturan
+ * sendiri (hanya mengubah awalan `0` -> `62`) dan karena itu menyimpang dari
+ * jalur kirim untuk nomor berawalan `00` atau tanpa awalan sama sekali.
  */
 export function hashRecipient(recipient: string | null | undefined): string | null {
   if (!recipient) return null;
-  let normalized = String(recipient).split('@')[0].split(':')[0].replace(/\D/g, '');
-  if (!normalized) return null;
-  // 0812... -> 62812... (awalan lokal Indonesia ke kode negara)
-  if (normalized.startsWith('0')) normalized = `62${normalized.slice(1)}`;
-  return createHash('sha256').update(`wa-api:recipient:${normalized}`).digest('hex').slice(0, 16);
+  // Buang bagian JID (`@s.whatsapp.net`, `:12`) sebelum normalisasi.
+  const mentah = String(recipient).split('@')[0].split(':')[0];
+  const kanonik = normalisasiNomor(mentah);
+  if (!kanonik) return null;
+  return createHash('sha256').update(`wa-api:recipient:${kanonik}`).digest('hex').slice(0, 16);
 }
 
 function clampText(v: string | null | undefined): string | null {

@@ -175,14 +175,14 @@ oleh API; kalau bisa ditulis lewat API, audit trail kehilangan nilainya.
 
 | Berkas | Perubahan |
 |---|---|
-| `backend/src/db/keputusan.ts` | **baru** — modul murni SQL: `recordGuardDecision`, `hashRecipient`, `evaluateGuard`, `summarizeDecisions`, `listDecisions`, `pruneDecisions` |
+| `backend/src/db/decision-log.ts` | **baru** — modul murni SQL: `recordGuardDecision`, `hashRecipient`, `evaluateGuard`, `summarizeDecisions`, `listDecisions`, `pruneDecisions` |
 | `backend/src/antiban-decision-log.ts` | **baru** — jembatan konteks sesi; re-export + `getSessionAntiBanPreset()` |
 | `backend/src/db/skema.ts` | tabel `antiban_decisions` + 3 index |
-| `backend/src/db.ts` | re-export `keputusan.js` |
+| `backend/src/db.ts` | re-export `decision-log.js` |
 | `backend/src/session-manager.ts` | instrumentasi 6 guard + impor |
 | `backend/src/routes/operasional.ts` | 2 endpoint baca + isolasi tenant |
 
-Pemisahan `db/keputusan.ts` (murni SQL) dari `antiban-decision-log.ts` (tahu
+Pemisahan `db/decision-log.ts` (murni SQL) dari `antiban-decision-log.ts` (tahu
 konteks sesi) disengaja: modul SQL bisa diuji tanpa memuat seluruh
 `SessionManager` beserta dependensi WhatsApp-nya.
 

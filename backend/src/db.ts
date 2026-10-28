@@ -22,7 +22,7 @@
  * - db/kesehatan.ts       skor risiko sesi
  * - db/jeda.ts            status jeda antrean
  * - db/api-logs.ts        log permintaan API
- * - db/keputusan.ts       log keputusan guard anti-ban (audit trail)
+ * - db/decision-log.ts       log keputusan guard anti-ban (audit trail)
  * - db/admin.ts           seed Super Admin
  */
 import './db/skema.js';
@@ -37,7 +37,7 @@ export * from './db/lid.js';
 export * from './db/kesehatan.js';
 export * from './db/jeda.js';
 export * from './db/api-logs.js';
-export * from './db/keputusan.js';
+export * from './db/decision-log.js';
 export * from './db/admin.js';
 
 import { seedDefaultAdmin } from './db/admin.js';

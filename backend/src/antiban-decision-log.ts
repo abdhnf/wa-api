@@ -1,19 +1,19 @@
 /**
  * Penghubung decision log untuk SessionManager.
  *
- * Kenapa berkas ini terpisah dari `db/keputusan.ts`: `db/keputusan.ts` sengaja
+ * Kenapa berkas ini terpisah dari `db/decision-log.ts`: `db/decision-log.ts` sengaja
  * hanya tahu soal penyimpanan (murni SQL, tanpa impor domain lain). Berkas ini
  * yang boleh tahu soal konteks sesi — nama preset aktif, dan bagaimana sebuah
  * guard dipanggil. Pemisahan itu menjaga `db/` tetap bisa diuji tanpa memuat
  * seluruh SessionManager.
  *
  * Yang diekspor:
- * - `recordGuardDecision`, `hashRecipient`  — diteruskan dari db/keputusan.ts
- * - `evaluateGuard`                          — diteruskan dari db/keputusan.ts
+ * - `recordGuardDecision`, `hashRecipient`  — diteruskan dari db/decision-log.ts
+ * - `evaluateGuard`                          — diteruskan dari db/decision-log.ts
  * - `getSessionAntiBanPreset`                — nama preset aktif sebuah sesi
  */
-export { recordGuardDecision, evaluateGuard, hashRecipient } from './db/keputusan.js';
-export type { GuardName, GuardDecision, DecisionRecord } from './db/keputusan.js';
+export { recordGuardDecision, evaluateGuard, hashRecipient } from './db/decision-log.js';
+export type { GuardName, GuardDecision, DecisionRecord } from './db/decision-log.js';
 
 import { getSessionAntiBanSettings } from './db.js';
 import { ANTIBAN_PRESETS } from './antiban.js';

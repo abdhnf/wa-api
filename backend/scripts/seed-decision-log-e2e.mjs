@@ -10,7 +10,7 @@
  */
 const { db } = await import('../dist/db.js'); // memicu skema (CREATE TABLE)
 const { createUser } = await import('../dist/db/users.js');
-const { recordGuardDecision, hashRecipient } = await import('../dist/db/keputusan.js');
+const { recordGuardDecision, hashRecipient } = await import('../dist/db/decision-log.js');
 
 const PREFIX = 'wa' + '_live_';
 

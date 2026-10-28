@@ -58,7 +58,7 @@ process.env.DATABASE_PATH = join(dir, 'test.db');
 await import('../dist/db.js'); // skema
 
 const { db } = await import('../dist/db/client.js');
-const { recordGuardDecision, hashRecipient, summarizeDecisions } = await import('../dist/db/keputusan.js');
+const { recordGuardDecision, hashRecipient, summarizeDecisions } = await import('../dist/db/decision-log.js');
 const { RateLimiter, ReplyRatioGuard, ContactGraphWarmer, DEFAULT_ANTIBAN_CONFIG } = await import('../dist/antiban.js');
 
 // Simulasikan tepat skenario yang membingungkan sebelumnya: preset broadcast,

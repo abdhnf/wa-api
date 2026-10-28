@@ -14,7 +14,7 @@ const dir = mkdtempSync(join(tmpdir(), 'wa-dl-'));
 process.env.DATABASE_PATH = join(dir, 'test.db');
 
 const { db } = await import('../dist/db/client.js');
-const { recordGuardDecision, hashRecipient, summarizeDecisions, listDecisions } = await import('../dist/db/keputusan.js');
+const { recordGuardDecision, hashRecipient, summarizeDecisions, listDecisions } = await import('../dist/db/decision-log.js');
 // Impor db.js untuk memicu efek samping skema (CREATE TABLE).
 await import('../dist/db.js');
 
@@ -57,7 +57,31 @@ console.log('\n=== 3. PII tidak bocor ===');
 const row = db.prepare("SELECT recipient_hash, reason FROM antiban_decisions WHERE message_id='msg-1'").get();
 check('nomor mentah TIDAK tersimpan', !JSON.stringify(row).includes('6281234567890'));
 check('hash 16 karakter', /^[0-9a-f]{16}$/.test(row.recipient_hash), row.recipient_hash);
-check('hash deterministik', hashRecipient('6281234567890') === hashRecipient('0812-3456-7890'));
+
+// Regresi: bug ini pernah lolos karena tidak ada uji yang menyentuhnya.
+// `0812...` dan `62812...` adalah nomor yang SAMA. Sebelum normalisasi awalan,
+// keduanya menghasilkan hash berbeda sehingga pengelompokan "berapa pesan ke
+// satu penerima" pecah tanpa error apa pun. Setiap varian penulisan nomor yang
+// lazim di Indonesia harus bertemu di satu hash.
+console.log('\n=== 3b. Regresi normalisasi nomor (bug yang pernah lolos) ===');
+const kanonik = hashRecipient('6281234567890');
+const varian = [
+  ['081234567890', 'awalan 0'],
+  ['6281234567890', 'awalan 62'],
+  ['+62 812-3456-7890', 'plus, spasi, strip'],
+  ['0812 3456 7890', 'spasi'],
+  ['6281234567890@s.whatsapp.net', 'JID WhatsApp'],
+  ['6281234567890:12@s.whatsapp.net', 'JID dengan device'],
+  ['0062 812 3456 7890', 'awalan internasional 00'],
+];
+for (const [nomor, label] of varian) {
+  check(`varian "${label}" -> hash sama`, hashRecipient(nomor) === kanonik,
+    `${nomor} -> ${hashRecipient(nomor)} vs ${kanonik}`);
+}
+check('nomor berbeda menghasilkan hash berbeda', hashRecipient('6281234567891') !== kanonik);
+check('kosong -> null', hashRecipient('') === null && hashRecipient(null) === null);
+check('tanpa digit -> null', hashRecipient('abc-def') === null);
+
 
 console.log('\n=== 4. Query baca ===');
 const sum = summarizeDecisions({ sessionId: 'sess-test', sinceHours: 24 });
@@ -83,7 +107,7 @@ try {
 check('tidak melempar saat metrics circular', !threw);
 
 console.log('\n=== 7. Retensi: buang baris lama, sisakan yang baru ===');
-const { pruneDecisions } = await import('../dist/db/keputusan.js');
+const { pruneDecisions } = await import('../dist/db/decision-log.js');
 // Sisipkan satu baris bertanggal 60 hari lalu, lalu pangkas dengan batas 30 hari.
 db.prepare(`INSERT INTO antiban_decisions (id, session_id, guard, decision, created_at)
             VALUES ('old-1', 'sess-test', 'warmup', 'allow', datetime('now','-60 days'))`).run();
