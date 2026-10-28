@@ -32,9 +32,18 @@ export function normalisasiNomor(masukan: string | null | undefined): string | n
   let digit = String(masukan).replace(/\D/g, '');
   if (!digit) return null;
 
-  // 62 812... -> sudah kanonik, biarkan
-  // 0 812...  -> buang nol depan, tambahkan 62
-  // 812...    -> tambahkan 62
+  // 62 812...  -> sudah kanonik, biarkan
+  // 0 812...   -> buang nol depan, tambahkan 62
+  // 812...     -> tambahkan 62
+  // 0062 812...-> buang awalan internasional 00, sisanya sudah 62...
+  //
+  // Awalan `00` HARUS ditangani lebih dulu. Tanpa itu, `006281234567890`
+  // masuk ke cabang `0` dan menjadi `62` + `06281234567890` = `620062...`,
+  // yaitu nomor yang tidak pernah ada. Kesalahan ini diam-diam lolos karena
+  // hasilnya masih berupa deretan digit yang "kelihatan benar".
+  if (digit.startsWith('00')) {
+    digit = digit.slice(2);
+  }
   if (digit.startsWith('62')) {
     // sudah benar
   } else if (digit.startsWith('0')) {
