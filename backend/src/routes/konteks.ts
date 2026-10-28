@@ -28,6 +28,43 @@ import { saringParams } from '../audit-params.js';
  * karena rute seperti `/sessions/:id/contact-graph/batch/:batchId` punya
  * keduanya dan yang dimaksud aksi biasanya batch-nya.
  */
+/**
+ * Penyimpan sementara nilai-sebelum-aksi, per permintaan.
+ *
+ * Dipakai handler yang sudah membaca keadaan lama sebelum menulis:
+ *
+ *     catatNilaiSebelum(req, { preset: lama });
+ *
+ * Nilainya diambil lagi oleh hook `onResponse` dan disimpan ke `params_before`.
+ * Tanpa jalur ini, `params` hanya bisa menjawab "diubah menjadi apa", bukan
+ * "diubah dari apa" — dan untuk aksi yang bisa dibalik, pertanyaan kedua itulah
+ * yang menentukan.
+ *
+ * Disimpan di objek `req`, bukan variabel modul, supaya tidak tertukar antar
+ * permintaan yang berjalan bersamaan.
+ */
+const KUNCI_NILAI_SEBELUM = Symbol.for('wa.nilaiSebelum');
+
+export function catatNilaiSebelum(req: unknown, nilai: Record<string, unknown>): void {
+  try {
+    const r = req as Record<symbol, unknown>;
+    // Digabung, bukan ditimpa: satu handler boleh mencatat beberapa hal.
+    r[KUNCI_NILAI_SEBELUM] = { ...((r[KUNCI_NILAI_SEBELUM] as object) || {}), ...nilai };
+  } catch {
+    /* pencatatan audit tidak boleh menggagalkan permintaan */
+  }
+}
+
+function ambilNilaiSebelum(req: unknown): string | null {
+  try {
+    const nilai = (req as Record<symbol, unknown>)[KUNCI_NILAI_SEBELUM];
+    if (!nilai || typeof nilai !== 'object' || Object.keys(nilai).length === 0) return null;
+    return saringParams(nilai);
+  } catch {
+    return null;
+  }
+}
+
 function ambilSasaran(params: unknown): { targetType: string | null; targetId: string | null } {
   const p = (params || {}) as Record<string, unknown>;
   const ambil = (kunci: string): string | null => {
@@ -115,6 +152,18 @@ app.addHook('onResponse', async (req, reply) => {
     const menulis = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
     const params = menulis ? saringParams((req as any).body) : null;
 
+    // Nilai SEBELUM aksi. Server tidak bisa mengetahuinya sendiri — ia hanya
+    // melihat permintaan yang sedang berjalan, bukan keadaan sebelum handler
+    // mengubahnya. Yang mengisinya adalah handler yang memang sudah membaca nilai
+    // lama (mis. `PUT /sessions/:id/antiban`), lewat `catatNilaiSebelum()`.
+    // Menebaknya di sini akan berarti mencatat sesuatu yang belum terjadi.
+    const paramsBefore = menulis ? ambilNilaiSebelum(req) : null;
+
+    // Baris ini bukti audit bila datang dari agen ATAU membawa nilai sebelum
+    // aksi. Konsekuensinya: baris audit tidak bisa dihapus non-admin, sedangkan
+    // log galat biasa tetap bisa dibersihkan pemiliknya.
+    const audit = Boolean(actor) || Boolean(paramsBefore);
+
     // Asynchronous non-blocking write ke SQLite agar thread HTTP tidak tertahan
     setImmediate(() => {
       insertApiLog({
@@ -129,6 +178,8 @@ app.addHook('onResponse', async (req, reply) => {
         targetType,
         targetId,
         params,
+        paramsBefore,
+        audit,
       });
     });
   } catch (err) {

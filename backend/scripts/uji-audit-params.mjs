@@ -70,6 +70,18 @@ check('boolean tersimpan', biasa.paused === true);
 check('angka tersimpan', biasa.limit === 1500);
 check('teks biasa tersimpan', biasa.reason === 'uji coba');
 
+console.log('\n=== 4b. Nama yang mengandung "pin" tapi bukan PIN ===');
+// `typingWPM` tertangkap pola `pin` karena "ty**pin**g". Nilainya angka kecepatan
+// mengetik — bagian konfigurasi anti-ban yang justru ingin diaudit. Sensor
+// berlebihan sama merusaknya dengan sensor kurang.
+const ketik = saringNilai({ typingWPM: 42, typingWPMStdDev: 7 });
+check('typingWPM tersimpan', ketik.typingWPM === 42, JSON.stringify(ketik));
+check('typingWPMStdDev tersimpan', ketik.typingWPMStdDev === 7);
+// Pengecualian TIDAK boleh melemahkan pola: nama lain yang mengandung "pin" tetap disensor.
+check('pinCode tetap disensor', JSON.stringify(saringNilai({ pinCode: '1234' })).includes(PENANDA_RAHASIA));
+check('pin tetap disensor', JSON.stringify(saringNilai({ pin: '1234' })).includes(PENANDA_RAHASIA));
+check('blast_pin tetap disensor', JSON.stringify(saringNilai({ blast_pin: '1234' })).includes(PENANDA_RAHASIA));
+
 console.log('\n=== 5. Angka & id yang mengandung digit tidak dianggap nomor ===');
 // "1500" adalah kuota, bukan nomor. Kalau ikut jadi hash, audit kehilangan
 // informasi yang justru dibutuhkan.

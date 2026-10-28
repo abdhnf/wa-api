@@ -6,6 +6,67 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
+## [Unreleased] — tiga celah bukti audit
+
+`api_logs` sudah menyimpan siapa, menyentuh apa, dan dengan nilai apa. Tiga hal
+membuatnya belum bisa dipakai sebagai bukti; ketiganya ditutup di sini.
+
+### Added
+
+- **`params_before`** — kolom untuk nilai *sebelum* aksi. Sebelumnya audit bisa
+  menjawab "preset diubah menjadi broadcast", tidak "dari apa" — dan untuk aksi
+  yang bisa dibalik, pertanyaan kedua itulah yang menentukan. Sengaja **tidak**
+  diisi otomatis oleh hook `onResponse`: server hanya melihat permintaan yang
+  sedang berjalan, bukan keadaan sebelumnya, jadi mengisinya di sana berarti
+  mencatat sesuatu yang belum terjadi. Yang mengisi adalah handler yang memang
+  sudah membaca nilai lama, lewat `catatNilaiSebelum(req, …)`. Dipasang di
+  `PUT /sessions/:id/antiban`.
+- **Retensi otomatis** (`backend/src/retensi.ts`) — dijalankan server sekali
+  sehari; baris audit disimpan 90 hari, catatan galat 30 hari (sama seperti
+  `antiban_decisions`). Dua ambang, bukan satu: pertanyaan "siapa melakukan apa
+  bulan lalu" biasanya baru muncul setelah beberapa minggu, sedangkan galat biasa
+  tidak perlu selama itu.
+- **`audit`** — penanda baris bukti. Baris bertanda ini tidak bisa dihapus
+  non-admin, sedangkan catatan galat biasa tetap bisa dibersihkan pemiliknya.
+
+### Kenapa retensi harus di server
+
+`POST /api-logs/clear` sengaja tidak bisa menghapus baris audit — kalau bisa,
+pihak yang diaudit dapat menghapus jejaknya sendiri. Konsekuensinya endpoint itu
+tidak akan pernah menyusutkan tabel, sementara volume naik karena GET dari agen
+kini ikut tercatat. Pembersihannya karena itu dipindah ke sisi server, dan
+jumlah yang dihapus dicatat ke log agar bukan penghapusan senyap.
+
+### Fixed
+
+- **Penyaring `params` menyensor `typingWPM`.** Pola rahasia menangkap `pin` di
+  dalam "ty**pin**g", sehingga angka kecepatan mengetik — bagian konfigurasi
+  anti-ban yang justru ingin diaudit — tersimpan sebagai `[REDACTED]`. Diperbaiki
+  dengan daftar pengecualian eksplisit, **bukan** dengan melonggarkan pola:
+  mengubahnya menjadi `(^|[_-])pin$` akan meloloskan `pinCode`, jauh lebih
+  berbahaya daripada satu angka yang tersensor.
+
+### Catatan pengujian
+
+`backend/scripts/uji-celah-audit.sh` — 11 asersi lewat HTTP sungguhan pada DB
+kosong di `/tmp` dan port cadangan. Yang dibuktikan, bukan diasumsikan:
+
+- `params_before.preset = "strict"` sementara `params.preset = "broadcast"`
+  sesudah dua kali perubahan berturut-turut — jadi nilai lama benar-benar dibaca
+  dari keadaan yang berlaku, bukan dari nilai bawaan.
+- Non-admin menghapus baris audit → `deletedCount: 0`, `dilewati: 1`, barisnya
+  masih ada; admin menghapus baris yang sama → benar-benar hilang. Tanpa asersi
+  kedua, "tidak bisa dihapus" bisa berarti "tidak bisa dihapus siapa pun".
+- Baris galat biasa tetap bisa dihapus pemiliknya — ini yang menjaga tombol di
+  panel tidak berubah menjadi 403.
+- Retensi: baris 100 hari hilang (audit & galat), baris hari ini tidak ikut.
+
+Regresi: `uji-audit-params` 64/64, `uji-api-logs-audit` 11/11, tenant 32/32,
+qr-jwt 4/4, decision-log 39/39, integrasi 22/22, normalisasi 28/28,
+`uji-mcp` 37/37.
+
+---
+
 ## [Unreleased] — server MCP untuk audit & setup terbatas
 
 `mcp/` — proses terpisah, transport stdio, 12 tool (7 baca + 5 tulis yang bisa

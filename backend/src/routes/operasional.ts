@@ -7,6 +7,7 @@
  */
 import { requireAuth } from '../auth.js';
 import { getUserLogs, listApiLogs, deleteApiLogs, clearApiLogs, summarizeDecisions, listDecisions } from '../db.js';
+import { RETENSI_AUDIT_HARI } from '../db/api-logs.js';
 import { manager } from './konteks.js';
 import type { FastifyInstance } from 'fastify';
 
@@ -68,19 +69,16 @@ export function daftarkanRuteOperasional(app: FastifyInstance): void {
 
   // 2. Hapus log tertentu (Bulk / Single Delete by Checkbox)
   //
-  // CATATAN PENTING — bukan perubahan, hanya penanda masalah:
+  // Non-admin boleh menghapus catatan galat miliknya sendiri — itu wajar, dan
+  // panel (`ApiLogsPage.tsx`) memang menampilkan tombol hapus untuk semua peran.
   //
-  // Non-admin boleh menghapus log miliknya sendiri. Itu masuk akal ketika
-  // `api_logs` hanya berisi catatan galat. Setelah tabel ini dipakai sebagai
-  // bukti audit (kolom actor/target/params), aturan itu menjadi cacat: pihak
-  // yang diaudit bisa menghapus jejaknya sendiri, dan audit yang bisa dihapus
-  // oleh yang diaudit bukan audit.
+  // Yang TIDAK boleh: menghapus baris yang bertanda `audit = 1`. Baris itu bukti
+  // audit, dan audit yang bisa dihapus oleh pihak yang diaudit bukan audit.
+  // Penyaringan dilakukan di `deleteApiLogs()`, bukan di sini, supaya tidak ada
+  // jalur lain yang bisa melewatinya.
   //
-  // Perbaikannya SENGAJA BELUM dilakukan di sini, karena panel
-  // (`ApiLogsPage.tsx`) menampilkan tombol hapus untuk semua peran. Mengubahnya
-  // menjadi admin-only akan memunculkan galat 403 di UI user non-admin yang
-  // sekarang memakai fitur itu. Ini perlu keputusan tersendiri, bukan
-  // diselundupkan ke dalam pekerjaan pencatatan audit.
+  // Karena endpointnya tetap `requireAuth` (bukan admin-only), tombol di panel
+  // tetap berfungsi; yang berubah hanya hasilnya untuk baris audit.
   app.delete('/api/v1/api-logs', { preHandler: requireAuth }, async (req, reply) => {
     const user = (req as any).apiKeyUser;
     const isAdmin = user && user.role === 'admin';
@@ -90,14 +88,25 @@ export function daftarkanRuteOperasional(app: FastifyInstance): void {
       return reply.code(400).send({ error: 'Daftar ID log yang akan dihapus tidak valid' });
     }
 
-    // Non-admin hanya bisa menghapus log milik dirinya sendiri
+    // Non-admin hanya bisa menghapus log milik dirinya sendiri, dan tidak bisa
+    // menyentuh baris audit (lihat `deleteApiLogs`).
     const filterUserId = isAdmin ? undefined : user?.id;
     const deletedCount = deleteApiLogs(body.ids, filterUserId);
+
+    // Baris yang diminta tapi tidak terhapus dilaporkan, bukan didiamkan.
+    // "5 log dihapus" ketika 3 di antaranya dilewati karena bukti audit adalah
+    // laporan yang menyesatkan.
+    const dilewati = Math.max(0, body.ids.length - deletedCount);
 
     return {
       success: true,
       deletedCount,
-      message: `${deletedCount} log berhasil dihapus.`,
+      dilewati,
+      message:
+        `${deletedCount} log berhasil dihapus.` +
+        (dilewati > 0
+          ? ` ${dilewati} baris dilewati karena merupakan bukti audit dan hanya bisa dihapus admin.`
+          : ''),
     };
   });
 
@@ -107,8 +116,11 @@ export function daftarkanRuteOperasional(app: FastifyInstance): void {
     const isAdmin = user && user.role === 'admin';
     const body = (req.body || {}) as { olderThanDays?: number; all?: boolean };
 
-    // Non-admin hanya bisa membersihkan log miliknya sendiri.
-    // Lihat catatan pada DELETE di atas: pembatasan admin-only belum dilakukan.
+    // Non-admin hanya bisa membersihkan catatan galat miliknya sendiri; baris
+    // audit tidak tersentuh (lihat `clearApiLogs`).
+    //
+    // Retensi otomatis TIDAK lewat sini — ia dijalankan server (`retensi.ts`),
+    // justru karena endpoint ini tidak bisa menyusutkan baris audit.
     const filterUserId = isAdmin && body.all ? undefined : user?.id;
     const olderThanDays = typeof body.olderThanDays === 'number' ? body.olderThanDays : undefined;
 
@@ -120,6 +132,13 @@ export function daftarkanRuteOperasional(app: FastifyInstance): void {
       message: olderThanDays
         ? `Log yang lebih lama dari ${olderThanDays} hari berhasil dibersihkan (${deletedCount} log dihapus).`
         : `Seluruh riwayat log berhasil dibersihkan (${deletedCount} log dihapus).`,
+      ...(isAdmin
+        ? {}
+        : {
+            catatan:
+              'Baris bukti audit tidak dihapus oleh operasi ini. Retensi otomatis dijalankan server ' +
+              `(audit disimpan ${RETENSI_AUDIT_HARI} hari).`,
+          }),
     };
   });
 

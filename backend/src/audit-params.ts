@@ -49,6 +49,21 @@ const POLA_RAHASIA =
   /(password|passwd|pin|token|secret|api[_-]?key|authorization|credential|private[_-]?key|cvv|otp|session[_-]?cookie)/i;
 
 /**
+ * Pengecualian: nama yang MENGANDUNG pola di atas tetapi bukan rahasia.
+ *
+ * `typingWPM` tertangkap oleh `pin` karena "ty**pin**g". Nilainya angka kecepatan
+ * mengetik — bagian dari konfigurasi anti-ban yang justru ingin diaudit. Menyaring
+ * berlebihan sama merusaknya dengan menyaring kurang: audit yang isinya
+ * `[REDACTED]` tidak bisa menjawab pertanyaan apa pun.
+ *
+ * Dicocokkan pada nama lengkap (case-insensitive), dan polanya sendiri TIDAK
+ * dilonggarkan. Memperbaiki "typingWPM" dengan mengubah pola menjadi
+ * `(^|[_-])pin$` akan meloloskan `pinCode` — jauh lebih berbahaya daripada satu
+ * angka kecepatan mengetik yang tersensor.
+ */
+const PENGECUALIAN = new Set(['typingwpm', 'typingwpmstddev']);
+
+/**
  * Nilai string yang bentuknya nomor telepon.
  *
  * Sengaja memakai `normalisasiNomor()` — bukan pencocokan digit sendiri — supaya
@@ -79,6 +94,7 @@ function tampakSepertiNomor(nilai: string): boolean {
 
 /** Apakah nama field ini menyimpan rahasia. */
 export function namaFieldRahasia(nama: string): boolean {
+  if (PENGECUALIAN.has(nama.toLowerCase())) return false;
   return POLA_RAHASIA.test(nama);
 }
 

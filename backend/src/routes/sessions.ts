@@ -10,6 +10,7 @@ import { validatePhoneFormat } from '../session-manager.js';
 import { requireJwt, requireAuth } from '../auth.js';
 import { db, getUserById } from '../db.js';
 import { tolakSesi, idSesiMilik } from '../kepemilikan.js';
+import { catatNilaiSebelum } from './konteks.js';
 import { engine, manager } from './konteks.js';
 import type { FastifyInstance } from 'fastify';
 
@@ -72,6 +73,23 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
     const user = req.apiKeyUser;
     const body = (req.body || {}) as { preset?: string; config?: any };
     const preset = body.preset || 'balanced';
+
+    // Catat nilai lama SEBELUM diubah, supaya audit bisa menjawab "dari apa ke
+    // apa". Dibaca dari state engine, bukan dari DB: `updateAntiBanSettings`
+    // memakai state yang sama, jadi yang dibandingkan adalah nilai yang benar-
+    // benar sedang berlaku. Kegagalan pembacaan tidak boleh menggagalkan
+    // permintaan — audit kurang lengkap lebih baik daripada permintaan gagal.
+    try {
+      const sebelum = manager.getAntiBanStatus(id);
+      if (sebelum) {
+        catatNilaiSebelum(req, {
+          preset: sebelum.preset,
+          ...(sebelum.currentConfig ? { config: sebelum.currentConfig } : {}),
+        });
+      }
+    } catch {
+      /* lanjut tanpa nilai lama */
+    }
 
     // Proteksi Hak Akses Opsi A:
     // User biasa HANYA boleh memilih preset standar ('strict' | 'balanced' | 'broadcast').

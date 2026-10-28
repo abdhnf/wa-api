@@ -16,6 +16,7 @@ import { daftarkanRuteSessions } from './routes/sessions.js';
 import { daftarkanRutePesan } from './routes/pesan.js';
 import { daftarkanRutePengaturan } from './routes/pengaturan.js';
 import { daftarkanRuteOperasional } from './routes/operasional.js';
+import { jadwalkanRetensiApiLogs } from './retensi.js';
 
 daftarkanRuteAuth(app);
 daftarkanRuteUsers(app);
@@ -29,6 +30,10 @@ try {
   await app.listen({ port, host: config.host });
   // Pulihkan antrean pesan yang belum terkirim dari SQLite
   await manager.recoverPendingMessages();
+  // Retensi `api_logs`: baris audit tidak bisa dihapus pemiliknya, jadi
+  // pembersihannya harus dari sisi server. Dijadwalkan setelah listen supaya
+  // kegagalannya tidak menghalangi server melayani permintaan.
+  jadwalkanRetensiApiLogs();
 } catch (err) {
   app.log.error(err);
   process.exit(1);

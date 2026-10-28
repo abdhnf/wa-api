@@ -156,6 +156,31 @@ ensureColumn('api_logs', 'target_type', 'TEXT');
 ensureColumn('api_logs', 'target_id', 'TEXT');
 ensureColumn('api_logs', 'params', 'TEXT');
 
+// `params_before` — nilai SEBELUM aksi.
+//
+// `params` hanya memuat nilai baru, sehingga audit bisa menjawab "preset diubah
+// ke broadcast" tetapi tidak "dari apa". Untuk aksi yang bisa dibalik, pertanyaan
+// keduanya justru yang menentukan: tanpa nilai lama, pembalikan harus ditebak.
+//
+// Sengaja TIDAK diisi otomatis oleh hook `onResponse`: server tidak tahu keadaan
+// sebelum handler berjalan, dan menebaknya berarti mencatat sesuatu yang belum
+// terjadi. Yang mengisinya adalah handler yang memang sudah membaca nilai lama
+// (mis. `PUT /sessions/:id/antiban` membaca preset sebelum menulis).
+ensureColumn('api_logs', 'params_before', 'TEXT');
+
+// `audit` — penanda bahwa baris ini bukti audit, bukan catatan galat biasa.
+//
+// Alasannya: `DELETE /api-logs` dan `POST /api-logs/clear` memakai `requireAuth`,
+// sehingga pemilik log bisa menghapus jejaknya sendiri. Sebagai catatan galat itu
+// wajar; sebagai bukti audit itu cacat — pihak yang diaudit menjadi penentu
+// apakah buktinya tetap ada.
+//
+// Memperketat seluruh endpoint menjadi admin-only akan memunculkan 403 di panel
+// yang sekarang menampilkan tombol hapus untuk semua peran. Karena itu yang
+// dipisahkan adalah BARISNYA, bukan endpointnya: baris bertanda `audit = 1` hanya
+// bisa dihapus admin, sementara log galat biasa tetap bisa dibersihkan pemiliknya.
+ensureColumn('api_logs', 'audit', 'INTEGER NOT NULL DEFAULT 0');
+
 // Production Indexes: Optimalkan query pencarian pesan, status antrean, dan receipt WA.
 //
 // WAJIB dijalankan SETELAH ensureColumn di atas: sebagian besar index menyentuh
@@ -173,6 +198,7 @@ CREATE INDEX IF NOT EXISTS idx_api_logs_user_time ON api_logs (user_id, created_
 CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs (created_at);
 CREATE INDEX IF NOT EXISTS idx_api_logs_actor_time ON api_logs (actor, created_at DESC) WHERE actor IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_api_logs_target ON api_logs (target_id) WHERE target_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_api_logs_audit ON api_logs (audit, created_at DESC) WHERE audit = 1;
 `);
 
 // Index unik parsial untuk nomor telepon. WAJIB dijalankan setelah ensureColumn
