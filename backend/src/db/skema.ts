@@ -176,6 +176,37 @@ CREATE INDEX IF NOT EXISTS idx_prt_user ON password_reset_tokens (user_id);
 CREATE INDEX IF NOT EXISTS idx_prt_expires ON password_reset_tokens (expires_at);
 `);
 
+// Tabel keputusan guard anti-ban (audit trail).
+//
+// Kenapa tabel terpisah, bukan menumpang `messages`: satu pesan bisa dievaluasi
+// berkali-kali (setiap kali antrean bangun, guard dinilai ulang). Menyimpannya
+// di baris pesan akan menimpa riwayat dan menghilangkan justru bagian yang
+// paling dibutuhkan — urutan percobaan dan alasan tiap penolakan.
+//
+// Yang dicatat SENGAJA bukan isi pesan: hanya hash penerima + metrik. Tujuannya
+// menjawab "kenapa pesan ini lolos/ditahan" tanpa menggandakan PII ke tabel
+// baru yang masa simpannya lebih panjang dari pesan aslinya.
+db.exec(`
+CREATE TABLE IF NOT EXISTS antiban_decisions (
+  id             TEXT PRIMARY KEY,
+  session_id     TEXT NOT NULL,
+  guard          TEXT NOT NULL,
+  decision       TEXT NOT NULL,
+  reason         TEXT,
+  message_id     TEXT,
+  batch_id       TEXT,
+  recipient_hash TEXT,
+  metrics        TEXT,
+  threshold      TEXT,
+  preset         TEXT,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_antiban_dec_session_time ON antiban_decisions (session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_antiban_dec_guard_time   ON antiban_decisions (guard, decision, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_antiban_dec_message      ON antiban_decisions (message_id) WHERE message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_antiban_dec_batch        ON antiban_decisions (batch_id) WHERE batch_id IS NOT NULL;
+`);
+
 // Sinkronisasi data kuota existing
 try {
   db.exec(`UPDATE users SET quota_limit = quota_per_week WHERE quota_limit IS NULL OR quota_limit = 100`);

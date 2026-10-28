@@ -16,6 +16,7 @@ import { upsertSession, insertMessage, updateMessageStatus, getMessageById, list
 import { RateLimiter, WarmUp, TimelockGuard, PresenceChoreographer, ReconnectThrottle, BanRecoveryOrchestrator, ReplyRatioGuard, ContactGraphWarmer, DEFAULT_ANTIBAN_CONFIG, DEFAULT_CONTACT_GRAPH_CONFIG, ANTIBAN_PRESETS, type AntiBanPreset, type AntiBanState } from './antiban.js';
 import { LidResolver, type LidMode } from './lid-resolver.js';
 import { HealthMonitor } from './health.js';
+import { recordGuardDecision, evaluateGuard, hashRecipient, getSessionAntiBanPreset } from './antiban-decision-log.js';
 import type { OutboundMessage, SessionInfo, QueueSessionStatus } from './types.js';
 import type { WhatsAppEngine } from './engine/WhatsAppEngine.js';
 import { DeliveryMetrics, type SessionMetricsReport } from './metrics.js';
@@ -752,7 +753,29 @@ export class SessionManager {
 
       const ab = this.getAntiBan(sessId);
       const warmupStatus = ab.warmup.getStatus();
-      if (warmupStatus.todayLimit !== -1 && warmupStatus.todaySent >= warmupStatus.todayLimit) {
+      // Kuota warm-up juga guard, dan dulu kegagalannya hanya terlihat sebagai
+      // alasan rotasi sesi — bukan sebagai penolakan pengiriman. Dicatat di sini
+      // supaya "sesi ini tidak mengirim apa pun" bisa dibedakan antara kuota
+      // warm-up habis, socket mati, atau timelock.
+      const warmupAllowed = !(warmupStatus.todayLimit !== -1 && warmupStatus.todaySent >= warmupStatus.todayLimit);
+      recordGuardDecision({
+        sessionId: sessId,
+        guard: 'warmup',
+        decision: warmupAllowed ? 'allow' : 'block',
+        reason: warmupAllowed
+          ? `Kuota warm-up tersisa ${warmupStatus.todayLimit === -1 ? 'tanpa batas' : `${warmupStatus.todayLimit - warmupStatus.todaySent} dari ${warmupStatus.todayLimit}`}`
+          : `Batas harian warm-up (${warmupStatus.todaySent}/${warmupStatus.todayLimit}) tercapai`,
+        recipientHash: hashRecipient(recipient),
+        preset: getSessionAntiBanPreset(sessId),
+        metrics: {
+          phase: warmupStatus.phase,
+          day: warmupStatus.day,
+          todaySent: warmupStatus.todaySent,
+          todayLimit: warmupStatus.todayLimit,
+        },
+        threshold: { todayLimit: warmupStatus.todayLimit },
+      });
+      if (!warmupAllowed) {
         return { healthy: false, reason: `Batas harian warm-up (${warmupStatus.todaySent}/${warmupStatus.todayLimit}) tercapai` };
       }
 
@@ -1096,27 +1119,83 @@ export class SessionManager {
         if (!isHighPriority) {
           let blocked: { reason: string; retryInMs: number; needsHandshake?: boolean } | null = null;
 
-          const recoveryDecision = ab.recovery.beforeSend();
+          // Setiap guard di bawah dicatat hasilnya lewat evaluateGuard(), termasuk
+          // yang MELOLOSKAN. Guard yang menahan sudah punya console.warn, tapi yang
+          // meloloskan tidak meninggalkan jejak apa pun — padahal justru itu yang
+          // dibutuhkan untuk menjawab "kenapa 50 pesan ini lolos". Tanpa catatan
+          // 'allow', audit hanya bisa menunjukkan penolakan, bukan kelonggaran.
+          const decisionBase = {
+            sessionId,
+            messageId: msg.id,
+            batchId: msg.batchId ?? null,
+            recipientHash: hashRecipient(msg.to),
+            preset: getSessionAntiBanPreset(sessionId),
+          };
+
+          const recoveryDecision = evaluateGuard(
+            { ...decisionBase, guard: 'recovery' },
+            () => ab.recovery.beforeSend(),
+            { allowReason: 'Tidak ada pemulihan ban yang aktif' },
+          );
           if (!recoveryDecision.allowed) {
             blocked = { reason: `🚑 ${recoveryDecision.reason}`, retryInMs: ab.recovery.remainingMs() };
           }
 
           if (!blocked) {
-            const timelockDecision = ab.timelock.canSend(jid);
+            const timelockDecision = evaluateGuard(
+              { ...decisionBase, guard: 'timelock' },
+              () => ab.timelock.canSend(jid),
+              { allowReason: 'Tidak ada timelock 463 aktif untuk kontak ini' },
+            );
             if (!timelockDecision.allowed) {
               blocked = { reason: `⛔ ${timelockDecision.reason}`, retryInMs: ab.timelock.remainingMs() };
             }
           }
 
           if (!blocked) {
-            const rr = ab.replyRatio.beforeSend(jid);
+            // Metrik reply-ratio disertakan supaya keputusan bisa direproduksi:
+            // "rasio 0/12 saat ambang 10%" jauh lebih informatif daripada
+            // sekadar 'allow'/'block'.
+            const rrStats = ab.replyRatio.getStats();
+            const rr = evaluateGuard(
+              { ...decisionBase, guard: 'replyRatio' },
+              () => ab.replyRatio.beforeSend(jid),
+              {
+                allowReason: ab.replyRatio.getConfig().enabled
+                  ? 'Reply ratio masih di atas ambang'
+                  : 'Guard reply ratio NONAKTIF pada preset ini',
+                threshold: {
+                  enabled: ab.replyRatio.getConfig().enabled,
+                  minRatio: ab.replyRatio.getConfig().minRatio,
+                  minMessagesBeforeEnforce: ab.replyRatio.getConfig().minMessagesBeforeEnforce,
+                },
+                metrics: { globalSent: rrStats.globalSent, globalReceived: rrStats.globalReceived },
+              },
+            );
             if (!rr.allowed) {
               blocked = { reason: `📉 ${rr.reason}`, retryInMs: ab.replyRatio.remainingMs(jid) };
             }
           }
 
           if (!blocked) {
-            const cg = ab.contactGraph.canMessage(jid, msg.batchId);
+            // Guard yang paling relevan untuk kasus ban: mengirim ke kontak yang
+            // belum pernah berinteraksi. Kalau preset mematikannya, itu WAJIB
+            // terlihat di audit — bukan tersembunyi sebagai 'allow' biasa.
+            const cgConfig = ab.contactGraph.getConfig();
+            const cg = evaluateGuard(
+              { ...decisionBase, guard: 'contactGraph' },
+              () => ab.contactGraph.canMessage(jid, msg.batchId),
+              {
+                allowReason: cgConfig.enabled
+                  ? 'Kontak dikenal atau handshake terpenuhi'
+                  : 'Guard contact graph NONAKTIF pada preset ini — kontak dingin lolos tanpa pemeriksaan',
+                threshold: {
+                  enabled: cgConfig.enabled,
+                  handshakeMinDelayMs: cgConfig.handshakeMinDelayMs,
+                  maxStrangerMessagesPerDay: cgConfig.maxStrangerMessagesPerDay,
+                },
+              },
+            );
             if (!cg.allowed) {
               blocked = {
                 reason: `🕸️ ${cg.reason}`,
@@ -1167,6 +1246,44 @@ export class SessionManager {
         } else {
           // Jalur Blast Normal: Cek delay & batasan
           const delayCheck = ab.rateLimiter.getDelayReason(msg.to, content);
+          const rlCfg = ab.rateLimiter.getConfig();
+          const rlStats = ab.rateLimiter.getStats();
+
+          // Alasan 'allow' di sini sengaja memuat jeda & pemakaian kuota, karena
+          // inilah satu-satunya tempat yang tahu berapa dekat pengiriman ke ambang
+          // batas. Tanpa angka ini, audit hanya bisa bilang "lolos" tanpa bisa
+          // menjawab "lolos karena masih jauh, atau karena ambangnya terlalu tinggi".
+          recordGuardDecision({
+            sessionId,
+            guard: 'rateLimiter',
+            decision: delayCheck.allowed ? 'allow' : 'block',
+            reason: delayCheck.allowed
+              ? `Lolos: jeda ${Math.round(delayCheck.delayMs / 1000)}s, ${rlStats.lastHour}/${rlCfg.maxPerHour} per jam, ${rlStats.lastDay}/${rlCfg.maxPerDay} per hari`
+              : delayCheck.reason ?? 'Batas blast tercapai',
+            messageId: msg.id,
+            batchId: msg.batchId ?? null,
+            recipientHash: hashRecipient(msg.to),
+            preset: getSessionAntiBanPreset(sessionId),
+            metrics: {
+              delayMs: delayCheck.delayMs,
+              lastMinute: rlStats.lastMinute,
+              lastHour: rlStats.lastHour,
+              lastDay: rlStats.lastDay,
+              knownChats: rlStats.knownChats,
+              recipientKnown: ab.rateLimiter.isKnownChat(msg.to),
+            },
+            threshold: {
+              maxPerMinute: rlCfg.maxPerMinute,
+              maxPerHour: rlCfg.maxPerHour,
+              maxPerDay: rlCfg.maxPerDay,
+              minDelayMs: rlCfg.minDelayMs,
+              maxDelayMs: rlCfg.maxDelayMs,
+              newChatDelayMs: rlCfg.newChatDelayMs,
+              maxIdenticalMessages: rlCfg.maxIdenticalMessages,
+              burstAllowance: rlCfg.burstAllowance,
+            },
+          });
+
           if (!delayCheck.allowed) {
             console.warn(`[session:${sessionId}] ⏸️ Batas blast tercapai (${delayCheck.reason}). Auto-pause antrean.`);
             // Kembalikan pesan ke depan antrean normal agar TIDAK GAGAL dan TIDAK HILANG!
