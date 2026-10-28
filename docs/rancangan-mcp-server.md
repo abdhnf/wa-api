@@ -454,9 +454,30 @@ Catatan: preset broadcast menonaktifkan contactGraph dan replyRatio.
 ```
 
 Alasan tidak mengembalikan JSON mentah: respons `GET /sessions/:id/antiban`
-berukuran besar karena memuat **semua** definisi preset (strict, balanced,
-broadcast) di setiap panggilan. Mengirim itu ke konteks agen menghabiskan
-token untuk informasi yang tidak ditanyakan. MCP memilih bagian yang relevan.
+memuat **semua** definisi preset (strict, balanced, broadcast) di setiap
+panggilan, padahal pertanyaan yang dijawab hanya "guard mana yang menahan".
+
+Angka ini sudah diukur (`scripts/ukur-respons-mcp.sh`, satu sesi, 30 pesan):
+
+| Endpoint | Byte | Perkiraan token |
+|---|---|---|
+| `GET /sessions/:id/antiban` | 3.466 | ~866 |
+| `GET /sessions/:id/metrics` | 409 | ~102 |
+| `GET /sessions/:id/queue/status` | 173 | ~43 |
+| `GET /messages/:sessionId` (30 pesan) | 7.485 | ~1.871 |
+| `GET /sessions` | 1.413 | ~353 |
+
+Dari 3.434 byte `antiBan`, **2.305 byte (67%) adalah `presets` + `currentConfig`**
+— definisi seluruh preset, bukan keadaan sesi. Jadi ukurannya tidak sebesar yang
+semula diduga (ratusan token, bukan ribuan), tetapi dua pertiga isinya memang
+tidak ditanyakan.
+
+**Koreksi terhadap dugaan awal:** risiko ukuran terbesar bukan `antiban`,
+melainkan `wa_list_messages`. Tiga puluh pesan sudah 7.485 byte; endpoint itu
+menerima `limit` sampai 200, sehingga satu panggilan tanpa batas bisa mencapai
+~50 KB (~12.000 token) dan menghabiskan konteks agen dalam sekali panggil. Tool
+riwayat pesan **wajib** memakai `limit` bawaan yang kecil (mis. 20) dan
+mengembalikan ringkasan per pesan, bukan `payload` mentah.
 
 ### 3.10 Penanganan galat: teruskan, jangan tafsirkan
 
