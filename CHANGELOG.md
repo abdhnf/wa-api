@@ -26,12 +26,12 @@ benar" padahal salah.
   penerima bisa menghasilkan dua hash berbeda, dan pengelompokan "berapa pesan
   ke satu penerima" pecah tanpa terlihat. Kini memakai `normalisasiNomor()`
   sebagai satu-satunya sumber bentuk kanonik.
-- **IP privat VM di 17 lokasi.** `172.30.30.229` tertanam di nilai bawaan kode
-  produksi (`panel-url.ts`, `blast_dashboard_url` di tiga berkas route), contoh
-  konfigurasi, skrip verifikasi, dan contoh di panel. Di produksi alamat itu
-  menghasilkan tautan yang tidak bisa dibuka pengguna tanpa error apa pun. Nilai
-  bawaan kini `localhost`; setting di produksi sudah terisi domain publik
-  sehingga tidak terpengaruh.
+- **IP privat VM di 17 lokasi.** Alamat IP privat VM pengembangan tertanam di
+  nilai bawaan kode produksi (`panel-url.ts`, `blast_dashboard_url` di tiga
+  berkas route), contoh konfigurasi, skrip verifikasi, dan contoh di panel. Di
+  produksi alamat itu menghasilkan tautan yang tidak bisa dibuka pengguna tanpa
+  error apa pun. Nilai bawaan kini `localhost`; setting di produksi sudah terisi
+  domain publik sehingga tidak terpengaruh.
 
 ### Changed
 
