@@ -301,12 +301,19 @@ tidak ada endpoint tulis baru. Yang dilakukan: menambah empat kolom pada
 ```ts
 // db/skema.ts — di samping ensureColumn lain yang sudah ada
 ensureColumn('api_logs', 'actor', 'TEXT');       // label agen dari X-MCP-Actor
-ensureColumn('api_logs', 'target_type', 'TEXT'); // 'session' | 'batch' | 'message'
+ensureColumn('api_logs', 'target_type', 'TEXT'); // 'session' | 'batch' | 'message' | 'user'
 ensureColumn('api_logs', 'target_id', 'TEXT');   // id sasaran
 ensureColumn('api_logs', 'params', 'TEXT');      // JSON body, sudah disaring
-CREATE INDEX IF NOT EXISTS idx_api_logs_actor_time ON api_logs (actor, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_api_logs_target      ON api_logs (target_id) WHERE target_id IS NOT NULL;
+// Kedua index di bawah ada di blok db.exec() SETELAH ensureColumn, karena
+// index pada kolom yang belum ada membuat instalasi DB baru gagal.
+CREATE INDEX IF NOT EXISTS idx_api_logs_actor_time ON api_logs (actor, created_at DESC) WHERE actor IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_api_logs_target ON api_logs (target_id) WHERE target_id IS NOT NULL;
 ```
+
+**Status: sudah diimplementasikan** pada commit tersendiri, terpisah dari MCP.
+Empat berkas berubah: `db/skema.ts` (kolom + index), `db/api-logs.ts` (insert &
+select), `routes/konteks.ts` (pengisian dari `req` + filter GET selektif), dan
+`audit-params.ts` (baru — penyaring `params`).
 
 Semua nilai diisi **oleh server**, dari permintaan yang sedang ia tangani:
 
@@ -321,13 +328,20 @@ Konsekuensi yang perlu disadari:
 
 - **`params` hanya diisi untuk metode yang menulis** (`POST`/`PUT`/`PATCH`/
   `DELETE`). Menyimpan body `GET` tidak ada gunanya dan hanya menambah ukuran.
-- **Penyaringan wajib, bukan opsional.** Nomor telepon di `params` diganti
-  hash-nya, mengikuti aturan yang sama dengan `antiban_decisions`; field yang
-  mengandung kredensial (`password`, `apiKey`, `token`, `pin`) dibuang. Tanpa
-  ini, `api_logs` berubah menjadi salinan data pribadi dan kredensial.
-- **Ukuran dibatasi** (mis. 2 KB per baris) karena `bodyLimit` server 50 MB
-  untuk upload media base64 — tanpa batas, satu permintaan media bisa menulis
-  puluhan MB ke tabel log.
+- **Penyaringan wajib, bukan opsional.** Nomor telepon diganti hash lewat
+  `hashRecipient()` — fungsi yang sama dengan `antiban_decisions`, jadi satu
+  nomor menghasilkan hash identik di kedua tabel dan bisa dikorelasikan tanpa
+  disimpan. Field yang namanya mengandung kredensial (`password`, `pin`,
+  `token`, `apiKey`, `secret`, `otp`, …) diganti `[REDACTED]`, bukan dihapus,
+  supaya tetap terlihat bahwa field itu dikirim.
+- **Ukuran dibatasi 2 KB per baris**, karena `bodyLimit` server 50 MB untuk
+  upload media base64 — tanpa batas, satu permintaan media bisa menulis puluhan
+  MB ke tabel log. Kedalaman objek dibatasi 4 tingkat dan array 20 elemen.
+
+Ketiga aturan itu punya uji sendiri (`uji-audit-params.mjs`, 59 asersi), termasuk
+yang membuktikan penyaring **tidak** terlalu agresif: `"1500"` (kuota) tetap
+angka, `sess-mu2512ti` tetap id, dan `"broadcast"` tetap preset. Penyaring yang
+menghapus semua yang mengandung digit akan membuat audit tidak berguna.
 
 ### 3.6 Membuat filter GET selektif, bukan dihapus
 
@@ -585,10 +599,11 @@ dan audit diambil dari permintaan itu sendiri (bukan tabel `mcp_audit`).
 
 Yang masih terbuka:
 
-1. **Retensi `api_logs`.** Sekarang tidak ada pembersihan otomatis. Dengan GET
-   agen ikut tercatat, volumenya naik — perlu ditetapkan batas (mis. 90 hari)
-   sebelum MCP dipakai rutin. `antiban_decisions` memakai 30 hari, tetapi audit
-   permintaan biasanya disimpan lebih lama.
+1. **Retensi `api_logs`.** Sekarang tidak ada pembersihan otomatis; yang ada
+   hanya endpoint manual `POST /api-logs/clear` dengan `olderThanDays`. Dengan
+   GET agen ikut tercatat, volumenya naik — perlu ditetapkan batas (mis. 90
+   hari) sebelum MCP dipakai rutin. `antiban_decisions` memakai 30 hari, tetapi
+   audit permintaan biasanya disimpan lebih lama.
 2. **Apakah `params` perlu menyimpan nilai sebelum aksi?** Untuk menjawab "preset
    diubah dari apa ke apa", `params` saja tidak cukup — ia hanya memuat nilai
    baru. Pilihan: (a) biarkan, dan jawab "ke apa" saja; (b) tambah kolom
@@ -597,3 +612,12 @@ Yang masih terbuka:
 3. **Apakah GET ber-`X-MCP-Actor` perlu dibatasi?** Tanpa batas, satu agen bisa
    membanjiri `api_logs` dengan pembacaan berulang. Opsi: batasi satu baris per
    (actor, endpoint, target) per menit, atau biarkan dan andalkan retensi.
+4. **Baris audit bisa dihapus oleh yang diaudit.** `DELETE /api-logs` dan
+   `POST /api-logs/clear` hanya memakai `requireAuth`; non-admin boleh menghapus
+   log miliknya sendiri. Selama `api_logs` hanya catatan galat itu wajar, tetapi
+   sebagai bukti audit ia cacat: pihak yang diaudit bisa menghapus jejaknya.
+   **Belum diperbaiki** karena panel (`ApiLogsPage.tsx`) menampilkan tombol hapus
+   untuk semua peran — mengubahnya menjadi admin-only akan memunculkan 403 di UI
+   yang sekarang dipakai. Perlu keputusan tersendiri; alternatifnya kolom
+   penanda `audit` yang membuat baris audit tidak bisa dihapus siapa pun kecuali
+   admin, sementara log galat biasa tetap bisa dibersihkan pemiliknya.

@@ -6,6 +6,62 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
+## [Unreleased] — `api_logs` sebagai bukti audit, bukan hanya catatan galat
+
+Persiapan untuk server MCP yang akan dipakai agen AI melakukan audit dan setup
+terbatas. Rancangan lengkapnya ada di `docs/rancangan-mcp-server.md`.
+
+Arah yang diambil: **audit adalah permintaan itu sendiri**, bukan catatan
+terpisah yang dilaporkan pemanggil. Server sudah melihat setiap request lewat
+hook `onResponse`; menyuruh agen menulis baris audit sendiri akan membuat satu
+aksi menghasilkan dua catatan yang bisa berbeda, menjadikan agen saksi atas
+perbuatannya sendiri, dan menambah endpoint tulis yang justru bisa dipakai
+menulis baris audit palsu.
+
+### Added
+
+- **Empat kolom audit pada `api_logs`** (`backend/src/db/skema.ts`): `actor`,
+  `target_type`, `target_id`, `params`. Ditambahkan lewat `ensureColumn`, jadi
+  baris lama tetap terbaca dengan nilai `NULL`. Dua index parsial menyertainya,
+  diletakkan **setelah** `ensureColumn` karena index pada kolom yang belum ada
+  membuat instalasi DB baru gagal.
+- **`backend/src/audit-params.ts`** — penyaring `req.body` sebelum disimpan.
+  Nomor telepon diganti hash lewat `hashRecipient()` (fungsi yang sama dengan
+  `antiban_decisions`, sehingga hash-nya bisa dikorelasikan), field yang
+  namanya mengandung kredensial diganti `[REDACTED]`, ukuran dibatasi 2 KB,
+  kedalaman 4 tingkat, array 20 elemen. Tanpa ini `api_logs` berubah menjadi
+  salinan data pribadi dan kredensial — log audit yang menyimpan rahasia bukan
+  audit, melainkan kebocoran kedua.
+- **Uji:** `scripts/uji-audit-params.mjs` (59 asersi) dan
+  `scripts/uji-api-logs-audit.sh` (11 asersi, lewat HTTP sungguhan pada DB
+  kosong di `/tmp`).
+
+### Changed
+
+- **GET yang berhasil kini dicatat bila membawa `X-MCP-Actor`**
+  (`backend/src/routes/konteks.ts`). Sebelumnya seluruh GET sukses dibuang
+  tanpa syarat, sehingga operasi baca agen tidak akan berjejak sama sekali.
+  Filter tidak dihapus — panel melakukan polling GET terus-menerus — melainkan
+  dibuat selektif.
+- **`insertApiLog()` dan `listApiLogs()`** menerima dan mengembalikan empat
+  kolom baru (`backend/src/db/api-logs.ts`).
+
+### Catatan
+
+- **Cacat yang ditemukan tetapi belum diperbaiki:** `DELETE /api-logs` dan
+  `POST /api-logs/clear` hanya memakai `requireAuth`, sehingga non-admin bisa
+  menghapus log miliknya sendiri. Sebagai catatan galat itu wajar; sebagai bukti
+  audit itu cacat, karena pihak yang diaudit bisa menghapus jejaknya. Perbaikan
+  belum dilakukan karena panel menampilkan tombol hapus untuk semua peran —
+  mengubahnya menjadi admin-only akan memunculkan 403 di UI yang sekarang
+  dipakai. Perlu keputusan tersendiri.
+- **`params` hanya menyimpan nilai baru**, bukan nilai sebelumnya. Untuk
+  menjawab "preset diubah dari apa ke apa", `params` saja tidak cukup.
+- **Retensi `api_logs` belum otomatis.** Volume naik karena GET agen ikut
+  tercatat; batas retensi perlu ditetapkan sebelum MCP dipakai rutin.
+
+---
+
 ## [Unreleased] — Pencatatan guard warm-up & penolakan seluruh sesi
 
 Dua cacat pada instrumentasi decision log yang **tidak memunculkan error** dan

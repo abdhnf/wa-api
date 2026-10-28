@@ -12,6 +12,13 @@ export interface ApiLogRecord {
   ip: string;
   durationMs: number;
   errorMessage?: string | null;
+  /** Label agen (header `X-MCP-Actor`), `null` untuk permintaan manusia. */
+  actor?: string | null;
+  /** Jenis sasaran: 'session' | 'batch' | 'message' | 'user'. */
+  targetType?: string | null;
+  targetId?: string | null;
+  /** JSON parameter yang sudah disaring; lihat `audit-params.ts`. */
+  params?: string | null;
   createdAt: string;
 }
 
@@ -24,11 +31,15 @@ export function insertApiLog(log: {
   ip: string;
   durationMs: number;
   errorMessage?: string | null;
+  actor?: string | null;
+  targetType?: string | null;
+  targetId?: string | null;
+  params?: string | null;
 }): void {
   try {
     db.prepare(`
-      INSERT INTO api_logs (id, user_id, method, endpoint, status_code, ip, duration_ms, error_message, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      INSERT INTO api_logs (id, user_id, method, endpoint, status_code, ip, duration_ms, error_message, actor, target_type, target_id, params, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     `).run(
       log.id,
       log.userId,
@@ -37,7 +48,11 @@ export function insertApiLog(log: {
       log.statusCode,
       log.ip,
       log.durationMs,
-      log.errorMessage ?? null
+      log.errorMessage ?? null,
+      log.actor ?? null,
+      log.targetType ?? null,
+      log.targetId ?? null,
+      log.params ?? null
     );
   } catch (err) {
     console.error('[db:api_logs] Gagal mencatat log API:', err);
@@ -76,7 +91,8 @@ export function listApiLogs(params: {
   // Ambil list log dengan join nama user
   const query = `
     SELECT 
-      l.id, l.user_id, l.method, l.endpoint, l.status_code, l.ip, l.duration_ms, l.error_message, l.created_at,
+      l.id, l.user_id, l.method, l.endpoint, l.status_code, l.ip, l.duration_ms, l.error_message,
+      l.actor, l.target_type, l.target_id, l.params, l.created_at,
       u.name as user_name, u.email as user_email
     FROM api_logs l
     LEFT JOIN users u ON u.id = l.user_id
@@ -98,6 +114,10 @@ export function listApiLogs(params: {
     ip: r.ip,
     durationMs: r.duration_ms,
     errorMessage: r.error_message,
+    actor: r.actor ?? null,
+    targetType: r.target_type ?? null,
+    targetId: r.target_id ?? null,
+    params: r.params ?? null,
     createdAt: r.created_at,
   }));
 

@@ -67,6 +67,20 @@ export function daftarkanRuteOperasional(app: FastifyInstance): void {
   });
 
   // 2. Hapus log tertentu (Bulk / Single Delete by Checkbox)
+  //
+  // CATATAN PENTING — bukan perubahan, hanya penanda masalah:
+  //
+  // Non-admin boleh menghapus log miliknya sendiri. Itu masuk akal ketika
+  // `api_logs` hanya berisi catatan galat. Setelah tabel ini dipakai sebagai
+  // bukti audit (kolom actor/target/params), aturan itu menjadi cacat: pihak
+  // yang diaudit bisa menghapus jejaknya sendiri, dan audit yang bisa dihapus
+  // oleh yang diaudit bukan audit.
+  //
+  // Perbaikannya SENGAJA BELUM dilakukan di sini, karena panel
+  // (`ApiLogsPage.tsx`) menampilkan tombol hapus untuk semua peran. Mengubahnya
+  // menjadi admin-only akan memunculkan galat 403 di UI user non-admin yang
+  // sekarang memakai fitur itu. Ini perlu keputusan tersendiri, bukan
+  // diselundupkan ke dalam pekerjaan pencatatan audit.
   app.delete('/api/v1/api-logs', { preHandler: requireAuth }, async (req, reply) => {
     const user = (req as any).apiKeyUser;
     const isAdmin = user && user.role === 'admin';
@@ -93,7 +107,8 @@ export function daftarkanRuteOperasional(app: FastifyInstance): void {
     const isAdmin = user && user.role === 'admin';
     const body = (req.body || {}) as { olderThanDays?: number; all?: boolean };
 
-    // Non-admin hanya bisa membersihkan log miliknya sendiri
+    // Non-admin hanya bisa membersihkan log miliknya sendiri.
+    // Lihat catatan pada DELETE di atas: pembatasan admin-only belum dilakukan.
     const filterUserId = isAdmin && body.all ? undefined : user?.id;
     const olderThanDays = typeof body.olderThanDays === 'number' ? body.olderThanDays : undefined;
 

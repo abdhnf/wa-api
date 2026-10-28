@@ -131,6 +131,31 @@ ensureColumn('users', 'blast_access_token', 'TEXT');
 // karena banyak user boleh belum punya nomor.
 ensureColumn('users', 'phone', 'TEXT');
 
+// Kolom audit pada `api_logs`.
+//
+// Latar: `api_logs` dipakai sebagai bukti audit untuk permintaan yang datang dari
+// agen (MCP), bukan hanya untuk mencatat galat. Tiga hal belum bisa dijawab
+// dengan kolom lama:
+//
+//   - `actor`      siapa agennya. `ip` tidak menolong karena agen berjalan di
+//                  mesin yang sama, jadi IP-nya 127.0.0.1 — sama dengan siapa
+//                  pun yang menjalankan curl di sana.
+//   - `target_*`   apa sasarannya. Id sesi sebenarnya tersimpan di dalam string
+//                  `endpoint`, tetapi mengekstraknya dengan pencocokan teks
+//                  rapuh; lebih baik disimpan sebagai kolom.
+//   - `params`     nilai apa yang dikirim. Tanpa ini audit hanya bisa bilang
+//                  "seseorang memanggil PUT /antiban", bukan "preset diubah
+//                  menjadi broadcast" — padahal nilai barunya yang ingin
+//                  diketahui.
+//
+// Semuanya diisi server dari permintaan yang sedang ditangani, bukan dilaporkan
+// pemanggil. `params` disaring sebelum disimpan (nomor -> hash, kredensial
+// dibuang, ukuran dibatasi); lihat `audit-params.ts`.
+ensureColumn('api_logs', 'actor', 'TEXT');
+ensureColumn('api_logs', 'target_type', 'TEXT');
+ensureColumn('api_logs', 'target_id', 'TEXT');
+ensureColumn('api_logs', 'params', 'TEXT');
+
 // Production Indexes: Optimalkan query pencarian pesan, status antrean, dan receipt WA.
 //
 // WAJIB dijalankan SETELAH ensureColumn di atas: sebagian besar index menyentuh
@@ -146,6 +171,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_wa_id ON messages (wa_message_id) WHERE 
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
 CREATE INDEX IF NOT EXISTS idx_api_logs_user_time ON api_logs (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs (created_at);
+CREATE INDEX IF NOT EXISTS idx_api_logs_actor_time ON api_logs (actor, created_at DESC) WHERE actor IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_api_logs_target ON api_logs (target_id) WHERE target_id IS NOT NULL;
 `);
 
 // Index unik parsial untuk nomor telepon. WAJIB dijalankan setelah ensureColumn
