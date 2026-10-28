@@ -6,6 +6,64 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
+## [Unreleased] — Decision log anti-ban
+
+Sistem anti-ban punya tujuh guard yang berjalan, tapi **tidak meninggalkan jejak
+keputusan**. Saat sebuah nomor terblokir, pertanyaan "guard mana yang seharusnya
+menahan ini, dan kenapa tidak?" tidak bisa dijawab dari data: `messages.status`
+berubah tanpa alasan, `api_logs` mencatat HTTP bukan keputusan guard, dan
+`antiban_state` hanya menyimpan kondisi akhir.
+
+Bagian ini menambahkan tabel `antiban_decisions` dan instrumentasi enam guard.
+**Tidak ada perilaku pengiriman yang berubah** — hanya pembacaan nilai yang sudah
+ada, dicatat per evaluasi.
+
+### Added
+
+- **Tabel `antiban_decisions`** (`backend/src/db/skema.ts`) — satu baris per
+  evaluasi guard, bukan per pesan. Satu pesan bisa dievaluasi berkali-kali
+  (setiap antrean bangun); menyimpannya sebagai kolom di `messages` akan
+  menimpa riwayat percobaan sebelumnya. Tiga index: per sesi+waktu, per
+  guard+waktu, dan per `message_id` untuk menjawab "kenapa pesan ini tertahan".
+- **Modul `backend/src/db/keputusan.ts`** — `recordGuardDecision`,
+  `hashRecipient`, `evaluateGuard`, `summarizeDecisions`, `listDecisions`,
+  `pruneDecisions`. Murni SQL, tanpa impor domain, supaya bisa diuji tanpa
+  memuat `SessionManager` beserta dependensi WhatsApp-nya.
+- **Jembatan `backend/src/antiban-decision-log.ts`** — tahu konteks sesi
+  (`getSessionAntiBanPreset`). Preset ikut dicatat karena `allow` pada
+  `broadcast` berarti hal yang berbeda dari `allow` pada `strict`: yang kedua
+  "diperiksa dan aman", yang pertama bisa berarti "guard-nya dimatikan".
+- **Instrumentasi enam guard** (`backend/src/session-manager.ts`): `recovery`,
+  `timelock`, `replyRatio`, `contactGraph`, `rateLimiter`, `warmup`. Keputusan
+  `allow` **dan** `block` sama-sama dicatat — guard yang menahan sudah memanggil
+  `console.warn`, yang meloloskan tidak, sehingga tanpa mencatat `allow` tidak
+  ada cara mengukur seberapa dekat pengiriman ke ambang batas.
+- **Dua endpoint baca** (`backend/src/routes/operasional.ts`):
+  `GET /api/v1/antiban/decisions/summary` dan `GET /api/v1/antiban/decisions`
+  (paginasi + filter guard/decision/batch/sesi/waktu). Non-admin hanya bisa
+  membaca sesi miliknya; tanpa `sessionId` mendapat `400`. Tidak ada endpoint
+  tulis — decision log hanya diisi jalur pengiriman.
+- **Enam skrip verifikasi** di `backend/scripts/`, semuanya memakai database
+  sementara di `/tmp`: unit (30 asersi), integrasi (15 asersi), boot, E2E HTTP,
+  migrasi pada salinan DB, dan fixture seed.
+
+### Notes
+
+- **Tanpa PII.** Yang disimpan hanya `recipient_hash` (SHA-256, 16 hex), metrik,
+  dan ambang — tidak pernah isi pesan atau nomor mentah.
+- **`hashRecipient` menormalkan awalan nomor** (`0812…` → `62812…`), disamakan
+  dengan `validatePhoneFormat()`. Tanpa itu satu penerima menghasilkan dua hash
+  dan analisis "berapa kali orang ini dikirimi" jadi salah.
+- **Pencatatan tidak pernah menggagalkan pengiriman.** `recordGuardDecision()`
+  menelan semua error menjadi `console.warn` sekali per kejadian; antrean tidak
+  boleh macet gara-gara audit.
+- **Migrasi non-destruktif**, diuji pada salinan database berisi data nyata:
+  10 tabel lama utuh, jumlah baris tidak berubah, tidak ada kolom hilang.
+- **Retensi 30 hari** lewat `pruneDecisions()` oportunistik; tanpa cron baru.
+- Rancangan lengkap beserta gap yang masih terbuka: `docs/rancangan-decision-log-antiban.md`.
+
+---
+
 ## [Unreleased] — Waktu per transisi status pesan
 
 Fitur ini menjawab satu pertanyaan yang sebelumnya tidak bisa dijawab panel:
