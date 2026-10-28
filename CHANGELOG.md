@@ -6,6 +6,55 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
+## [Unreleased] — isolasi tenant pada rute sesi
+
+Prasyarat untuk server MCP multi-tenant. Selama satu API key bisa menyentuh sesi
+milik user lain, MCP hanya akan membungkus kebocoran itu dengan antarmuka yang
+lebih rapi — dan memberi agen AI kemampuan menghentikan antrean atau memutus
+sesi tenant lain.
+
+Sebelum perubahan ini, enam endpoint pada `routes/sessions.ts` hanya memakai
+`requireAuth` tanpa pemeriksaan kepemilikan sama sekali, dan satu endpoint
+(`GET /metrics`) mengembalikan laporan seluruh tenant dalam satu respons. Satu
+pola pemeriksaan yang benar sudah ada, tetapi disalin ke sebagian handler saja —
+justru handler yang tidak menyalinnya yang bocor.
+
+### Added
+
+- **`backend/src/kepemilikan.ts`** — `periksaKepemilikanSesi()`, `tolakSesi()`,
+  dan `idSesiMilik()`. Membaca `sessions.user_id` dari database, bukan dari
+  `manager.getSession()`, karena pemeriksaan otorisasi tidak boleh bergantung
+  pada koneksi WhatsApp yang mungkin sedang putus.
+- **Uji:** `scripts/uji-tenant-isolasi.sh` (32 asersi) menjalankan server pada DB
+  kosong di `/tmp` dan port cadangan, lalu memanggil setiap endpoint dengan dua
+  kunci berbeda: kunci pemilik harus 2xx, kunci penyusup harus 403/404. Uji yang
+  sama dijalankan terhadap kode **sebelum** perbaikan dan gagal 10 kali — tanpa
+  pembanding itu, uji hijau tidak membuktikan apa pun.
+- **Uji:** `scripts/uji-qr-jwt.sh` (4 asersi) untuk alur pairing panel yang
+  memakai `requireJwt`, karena rute itu tidak mengisi `req.apiKeyUser` dan
+  identitasnya harus diambil dari `req.user.id`.
+
+### Fixed
+
+- `GET /sessions/:id/metrics`, `GET /sessions/:id/queue/status`,
+  `POST /sessions/:id/queue/pause|resume|clear`, `PATCH /sessions/:id`,
+  `POST /sessions/:id/logout|reconnect|pair`, `DELETE /sessions/:id`, dan
+  `GET /sessions/:id/qr` kini memeriksa kepemilikan.
+- `GET /metrics` disaring: non-admin hanya menerima laporan sesi miliknya.
+- Enam salinan blok pemeriksaan yang sudah ada (`antiban`, `contact-graph`)
+  diganti ke helper yang sama, supaya tidak ada dua cara berbeda menjawab
+  pertanyaan yang sama.
+
+### Catatan
+
+- Sesi tanpa `user_id` tetap boleh diakses. Kolom itu punya `DEFAULT
+  'usr_c26f74d6'`, jadi baris lama tidak `NULL`; aturan ini hanya jaring pengaman
+  agar sesi yang belum terklasifikasi tidak mengunci admin dari sesinya sendiri.
+- Sesi yang tidak ada dijawab **404**, bukan 403, supaya tidak membocorkan bahwa
+  id tersebut ada.
+
+---
+
 ## [Unreleased] — `api_logs` sebagai bukti audit, bukan hanya catatan galat
 
 Persiapan untuk server MCP yang akan dipakai agen AI melakukan audit dan setup

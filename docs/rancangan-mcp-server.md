@@ -94,6 +94,17 @@ ada — dan memberi agen milik user biasa jalan yang rapi menuju data user lain.
 Menutup celah ini adalah **pekerjaan tersendiri (Bagian 7.1)**, bukan bagian
 dari MCP, dan harus selesai lebih dulu.
 
+> **Status: sudah ditutup.** Bagian 7.1 dikerjakan lebih dulu dan masuk ke
+> `main` sebelum server MCP dimulai. Saat membaca `routes/sessions.ts` ternyata
+> jumlah endpoint tanpa pemeriksaan **lebih banyak** dari enam: `PATCH
+> /sessions/:id` (rename & ganti profil), `POST /sessions/:id/logout`,
+> `POST /sessions/:id/pair`, `DELETE /sessions/:id`, dan `GET /sessions/:id/qr`
+> juga tidak memeriksa kepemilikan — `DELETE` menghapus sesi orang lain, `pair`
+> memutus autentikasi lama lalu menggantinya dengan QR baru. Daftar enam di atas
+> adalah yang **terbukti** lewat HTTP, bukan yang lengkap. Pemeriksaan sekarang
+> dipusatkan di `backend/src/kepemilikan.ts`; lihat `CHANGELOG.md` untuk rincian
+> dan bukti ujinya.
+
 ### 2.2 Audit **adalah** hasil permintaan — bukan catatan terpisah
 
 Koreksi terhadap rancangan awal dokumen ini. Rancangan pertama mengusulkan tabel
@@ -546,6 +557,13 @@ commit MCP, karena:
   sebelumnya `200`.
 
 Urutan yang benar: **tutup celah → uji panel → baru bangun MCP.**
+
+**Sudah dikerjakan.** Celah ditutup lebih dulu, dengan uji yang memanggil setiap
+endpoint memakai dua kunci berbeda (pemilik harus `2xx`, penyusup harus
+`403`/`404`), dan uji itu dijalankan juga terhadap kode sebelum perbaikan untuk
+memastikan ia memang menangkap kebocoran — 10 kegagalan di kode lama, 0 setelah
+perbaikan. Panel diperiksa: seluruh panggilan di `panel/src/api.ts` memakai sesi
+milik pengguna sendiri, dan `GET /metrics` tidak dipakai panel sama sekali.
 
 ### 7.2 Sisanya
 

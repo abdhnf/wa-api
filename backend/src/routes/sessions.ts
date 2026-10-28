@@ -8,7 +8,8 @@
 
 import { validatePhoneFormat } from '../session-manager.js';
 import { requireJwt, requireAuth } from '../auth.js';
-import { db } from '../db.js';
+import { db, getUserById } from '../db.js';
+import { tolakSesi, idSesiMilik } from '../kepemilikan.js';
 import { engine, manager } from './konteks.js';
 import type { FastifyInstance } from 'fastify';
 
@@ -22,12 +23,10 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
 
   app.get('/api/v1/sessions/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const user = (req as any).apiKeyUser;
+    const tolak = tolakSesi((req as any).apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     try {
       const session = await manager.getSession(id);
-      if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
-        return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
-      }
       return { session };
     } catch {
       return reply.code(404).send({ error: 'Session tidak ditemukan' });
@@ -35,27 +34,29 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
   });
 
   // Status engine anti-ban session (warmup, rate limiter, timelock, circadian)
+  //
+  // Sebelumnya tanpa pemeriksaan kepemilikan: API key user mana pun bisa membaca
+  // metrik sesi user lain, termasuk jumlah err463/err429 dan kontak diblokir.
   app.get('/api/v1/sessions/:id/metrics', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     return reply.send({ metrics: manager.metrics.getReport(id) });
   });
 
-  app.get('/api/v1/metrics', { preHandler: requireAuth }, async (_req, reply) => {
-    return reply.send({ metrics: manager.metrics.getAllReports() });
+  // Laporan semua sesi sekaligus — wajib disaring, karena endpoint ini
+  // mengembalikan seluruh tenant dalam satu respons.
+  app.get('/api/v1/metrics', { preHandler: requireAuth }, async (req, reply) => {
+    const semua = manager.metrics.getAllReports();
+    const milik = idSesiMilik(req.apiKeyUser);
+    if (!milik) return reply.send({ metrics: semua });
+    return reply.send({ metrics: semua.filter((m) => milik.has(m.sessionId)) });
   });
 
   app.get('/api/v1/sessions/:id/antiban', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const user = req.apiKeyUser;
-
-    try {
-      const session = await manager.getSession(id);
-      if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
-        return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
-      }
-    } catch {
-      return reply.code(404).send({ error: 'Session tidak ditemukan' });
-    }
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
 
     const status = manager.getAntiBanStatus(id);
     if (!status) return reply.code(404).send({ error: 'Session tidak ditemukan' });
@@ -65,17 +66,10 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
   // Update konfigurasi anti-ban per session (preset & custom tuning)
   app.put('/api/v1/sessions/:id/antiban', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
+
     const user = req.apiKeyUser;
-
-    try {
-      const session = await manager.getSession(id);
-      if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
-        return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
-      }
-    } catch {
-      return reply.code(404).send({ error: 'Session tidak ditemukan' });
-    }
-
     const body = (req.body || {}) as { preset?: string; config?: any };
     const preset = body.preset || 'balanced';
 
@@ -112,30 +106,16 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
    */
   app.get('/api/v1/sessions/:id/contact-graph/batch/:batchId', { preHandler: requireAuth }, async (req, reply) => {
     const { id, batchId } = req.params as { id: string; batchId: string };
-    const user = req.apiKeyUser;
-    try {
-      const session = await manager.getSession(id);
-      if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
-        return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
-      }
-    } catch {
-      return reply.code(404).send({ error: 'Session tidak ditemukan' });
-    }
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     const status = manager.getBatchApprovalStatus(id, batchId);
     return { sessionId: id, ...status };
   });
 
   app.post('/api/v1/sessions/:id/contact-graph/batch', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const user = req.apiKeyUser;
-    try {
-      const session = await manager.getSession(id);
-      if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
-        return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
-      }
-    } catch {
-      return reply.code(404).send({ error: 'Session tidak ditemukan' });
-    }
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
 
     const body = (req.body || {}) as { batchId?: string; recipients?: string[] };
     if (!body.batchId) return reply.code(400).send({ error: 'batchId wajib diisi' });
@@ -167,15 +147,8 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
 
   app.delete('/api/v1/sessions/:id/contact-graph/batch/:batchId', { preHandler: requireAuth }, async (req, reply) => {
     const { id, batchId } = req.params as { id: string; batchId: string };
-    const user = req.apiKeyUser;
-    try {
-      const session = await manager.getSession(id);
-      if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
-        return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
-      }
-    } catch {
-      return reply.code(404).send({ error: 'Session tidak ditemukan' });
-    }
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
 
     const body = (req.body || {}) as { recipient?: string };
     let jid: string | undefined;
@@ -197,16 +170,8 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
   // Reset cooldown Reply Ratio (opsional per target JID atau semua kontak)
   app.post('/api/v1/sessions/:id/antiban/reset-cooldown', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const user = req.apiKeyUser;
-
-    try {
-      const session = await manager.getSession(id);
-      if (user && user.role !== 'admin' && session.userId && session.userId !== user.id) {
-        return reply.code(403).send({ error: 'Akses ditolak: sesi ini milik pengguna lain' });
-      }
-    } catch {
-      return reply.code(404).send({ error: 'Session tidak ditemukan' });
-    }
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
 
     const body = (req.body || {}) as { jid?: string };
     try {
@@ -226,8 +191,14 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
   });
 
   // Rename atau ganti profile session (tanpa putus koneksi)
+  //
+  // Sebelumnya tanpa pemeriksaan kepemilikan: user mana pun bisa mengganti nama
+  // sesi orang lain, atau memindahkan profilnya ke 'fresh' — yang menyalakan
+  // warm-up dan memperlambat pengiriman sesi itu.
   app.patch('/api/v1/sessions/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     const body = (req.body || {}) as { name?: string; numberProfile?: 'fresh' | 'mature' };
 
     if (!body.name && !body.numberProfile) {
@@ -248,14 +219,23 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
     }
   });
 
-  app.post('/api/v1/sessions/:id/logout', { preHandler: requireAuth }, async (req) => {
+  // Kelima endpoint di bawah menyentuh sesi secara langsung dan sebelumnya
+  // tanpa pemeriksaan kepemilikan sama sekali. Yang paling merusak:
+  // `DELETE /sessions/:id` menghapus sesi user lain, `POST /pair` memutus
+  // autentikasi lama dan menggantinya dengan QR baru, dan `POST /reconnect`
+  // memaksa sambung ulang. Semuanya bisa dipanggil dengan API key siapa pun.
+  app.post('/api/v1/sessions/:id/logout', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     await manager.logout(id);
     return { success: true };
   });
 
-  app.post('/api/v1/sessions/:id/reconnect', { preHandler: requireAuth }, async (req) => {
+  app.post('/api/v1/sessions/:id/reconnect', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     const session = await manager.reconnect(id);
     return { success: true, session };
   });
@@ -263,6 +243,8 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
   // Re-pair (putuskan auth lama & request QR code baru untuk session yang sama)
   app.post('/api/v1/sessions/:id/pair', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     const body = (req.body || {}) as { name?: string; phone?: string };
     try {
       const { qr, session } = await manager.startPairing(id, body.name || id, body.phone || '62xxx');
@@ -272,15 +254,27 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
     }
   });
 
-  app.delete('/api/v1/sessions/:id', { preHandler: requireAuth }, async (req) => {
+  app.delete('/api/v1/sessions/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     await manager.delete(id);
     return { success: true };
   });
 
-  // QR polling: client panggil setelah POST /sessions untuk ambil QR yang muncul
+  // QR polling: client panggil setelah POST /sessions untuk ambil QR yang muncul.
+  //
+  // Rute ini memakai `requireJwt`, yang hanya memverifikasi token dan TIDAK
+  // mengisi `req.apiKeyUser`. Akibatnya sebelum perubahan ini rute ini tidak
+  // punya identitas pemanggil sama sekali, sehingga pemeriksaan kepemilikan
+  // tidak mungkin dilakukan — siapa pun yang punya JWT valid bisa mengambil QR
+  // sesi mana pun, dan QR itu cukup untuk memindahkan sesi ke perangkat lain.
+  // Karena itu identitas diambil dari `req.user.id` lewat `getUserById`.
   app.get('/api/v1/sessions/:id/qr', { preHandler: requireJwt }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const pemanggil = getUserById((req.user as any)?.id);
+    const tolak = tolakSesi(pemanggil, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     const engineAny = engine as any;
     if (typeof engineAny.getPendingQr !== 'function') {
       return reply.code(400).send({ error: 'QR tidak tersedia' });
@@ -291,13 +285,22 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
   });
 
   // ============ Queue Control Endpoints (Pause / Resume / Status) ============
-  app.get('/api/v1/sessions/:id/queue/status', { preHandler: requireAuth }, async (req) => {
+  //
+  // Keempat endpoint ini sebelumnya hanya memakai `requireAuth`. Tiga di
+  // antaranya MENULIS: user mana pun bisa menghentikan antrean sesi user lain,
+  // atau membatalkan seluruh pesan yang sedang menunggu di sesi itu. Satu
+  // di antaranya membaca status antrean (termasuk jumlah tertunda).
+  app.get('/api/v1/sessions/:id/queue/status', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     return manager.getQueueStatus(id);
   });
 
   app.post('/api/v1/sessions/:id/queue/pause', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     const body = (req.body || {}) as { reason?: string };
     const res = manager.pauseQueue(id, body.reason || 'Dijeda manual oleh pengguna');
     return reply.send(res);
@@ -305,12 +308,16 @@ export function daftarkanRuteSessions(app: FastifyInstance): void {
 
   app.post('/api/v1/sessions/:id/queue/resume', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     const res = manager.resumeQueue(id);
     return reply.send(res);
   });
 
   app.post('/api/v1/sessions/:id/queue/clear', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const tolak = tolakSesi(req.apiKeyUser, id);
+    if (tolak) return reply.code(tolak.code).send(tolak.body);
     const body = (req.body || {}) as { reason?: string; batchId?: string };
     const res = manager.clearQueue(id, body.reason || 'Dibatalkan oleh pengguna', body.batchId);
     return reply.send(res);
