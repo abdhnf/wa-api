@@ -13,7 +13,7 @@
  */
 import { readFileSync } from 'node:fs';
 
-const BASE = 'http://172.30.30.229:3100/api/v1';
+const BASE = 'http://localhost:3100/api/v1';
 const ROUTES = JSON.parse(readFileSync('/tmp/route-list.json', 'utf8'));
 
 const isiParam = (p) =>

@@ -285,7 +285,7 @@ try {
   // ============================================================
   console.log('\n== C. Validasi nilai tidak sah ==');
 
-  for (const buruk of ['172.30.30.229:5174', 'ftp://contoh.local', 'https://ada spasi.local']) {
+  for (const buruk of ['localhost:5174', 'ftp://contoh.local', 'https://ada spasi.local']) {
     const r = await fetch(`${BASE}/settings`, {
       method: 'PATCH',
       headers: authHeader,

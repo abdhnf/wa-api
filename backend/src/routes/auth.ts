@@ -6,6 +6,7 @@
  * daftarkanRuteAuth() saat menyusun aplikasi.
  */
 
+import { BLAST_DASHBOARD_URL_BAWAAN } from '../panel-url.js';
 import { requireAuth } from '../auth.js';
 import { hashPassword, verifyPassword, generateApiKey, checkLoginBruteForce, recordLoginFailure, recordLoginSuccess, verifyTurnstileToken, getClientIp } from '../security.js';
 import { getUserByEmail, getUserByPhone, getUserById, createUser, updateUser, setUserApiKey, setUserBlastPin, verifyAndBurnBlastLaunchToken, getOrCreateUserBlastAccessToken, rotateUserBlastAccessToken, getUserByBlastAccessToken, getSetting, upsertGoogleUser } from '../db.js';
@@ -185,7 +186,7 @@ export function daftarkanRuteAuth(app: FastifyInstance): void {
     }
 
     const token = getOrCreateUserBlastAccessToken(user.id);
-    const blastDashboardBaseUrl = (getSetting('blast_dashboard_url') || 'http://172.30.30.229:8085').replace(/\/$/, '');
+    const blastDashboardBaseUrl = (getSetting('blast_dashboard_url') || BLAST_DASHBOARD_URL_BAWAAN).replace(/\/$/, '');
     const launchUrl = `${blastDashboardBaseUrl}/auth/launch?token=${token}`;
 
     return {
@@ -203,7 +204,7 @@ export function daftarkanRuteAuth(app: FastifyInstance): void {
     if (!user) return reply.code(404).send({ error: 'User tidak ditemukan' });
 
     const token = rotateUserBlastAccessToken(user.id);
-    const blastDashboardBaseUrl = (getSetting('blast_dashboard_url') || 'http://172.30.30.229:8085').replace(/\/$/, '');
+    const blastDashboardBaseUrl = (getSetting('blast_dashboard_url') || BLAST_DASHBOARD_URL_BAWAAN).replace(/\/$/, '');
     const launchUrl = `${blastDashboardBaseUrl}/auth/launch?token=${token}`;
 
     return {

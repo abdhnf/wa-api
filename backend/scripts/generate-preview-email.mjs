@@ -29,7 +29,7 @@ mkdirSync(keluaran, { recursive: true });
 
 // Token contoh. Hanya untuk tampilan — bukan token yang bisa dipakai.
 const TOKEN_CONTOH = 'Kj7mQ2xR9pLv4TnW8sYb3AcE6dGh1FzU';
-const BASIS_URL = 'http://172.30.30.229:5174';
+const BASIS_URL = 'http://localhost:5174';
 
 const tautan = bangunTautanReset(BASIS_URL, TOKEN_CONTOH);
 

@@ -20,7 +20,7 @@
 
 set -uo pipefail
 
-BASE="${1:-http://172.30.30.229:3100/api/v1}"
+BASE="${1:-http://localhost:3100/api/v1}"
 VAULT="$HOME/.hermes/vault/wa-api-admin.json"
 PASS=0
 FAIL=0

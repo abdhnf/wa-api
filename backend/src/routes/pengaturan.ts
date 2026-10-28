@@ -6,6 +6,7 @@
  * daftarkanRutePengaturan() saat menyusun aplikasi.
  */
 import { requireApiKey, requireAuth } from '../auth.js';
+import { BLAST_DASHBOARD_URL_BAWAAN } from '../panel-url.js';
 import { listMessagesPaged, getAllSettings, setSettings, getAllUserSettings, setUserSettings } from '../db.js';
 import { simpanKonfigurasiMail, ujiKoneksiMail, kirimEmail, konfigurasiUntukKlien, PRESET_PROVIDER } from '../mailer.js';
 import { templateEmailUji, templateEmailUjiTeks, BRAND } from '../mail-templates.js';
@@ -85,7 +86,7 @@ export function daftarkanRutePengaturan(app: FastifyInstance): void {
         turnstileSiteKey: all['turnstile_site_key'] || '',
         turnstileSecretKey: all['turnstile_secret_key'] ? '••••••••' : '',
         hasTurnstileSecret: Boolean(all['turnstile_secret_key']),
-        blastDashboardUrl: all['blast_dashboard_url'] || 'http://172.30.30.229:8085',
+        blastDashboardUrl: all['blast_dashboard_url'] || BLAST_DASHBOARD_URL_BAWAAN,
         // Basis URL panel ini sendiri. Dipakai menyusun tautan di email (reset
         // password, buka dashboard). Kosong berarti belum pernah diatur dan
         // kode akan jatuh ke env, lalu ke alamat pengembangan — lihat panel-url.ts.

@@ -6,6 +6,7 @@
  * daftarkanRuteUsers() saat menyusun aplikasi.
  */
 import { requireAdmin } from '../auth.js';
+import { BLAST_DASHBOARD_URL_BAWAAN } from '../panel-url.js';
 import { hashPassword, generateApiKey } from '../security.js';
 import { getUserByEmail, getUserByPhone, getUserById, listUsers, createUser, updateUser, deleteUser, setUserPassword, setUserApiKey, setUserBlastPin, clearUserBlastPin, getUserBlastAccessToken, getSetting } from '../db.js';
 import { normalisasiNomor } from '../phone.js';
@@ -191,7 +192,7 @@ export function daftarkanRuteUsers(app: FastifyInstance): void {
       };
     }
 
-    const base = (getSetting('blast_dashboard_url') || 'http://172.30.30.229:8085').replace(/\/$/, '');
+    const base = (getSetting('blast_dashboard_url') || BLAST_DASHBOARD_URL_BAWAAN).replace(/\/$/, '');
     return {
       success: true,
       hasToken: true,

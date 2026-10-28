@@ -17,7 +17,7 @@ export const SettingsPage: React.FC = () => {
  const [turnstileSiteKey, setTurnstileSiteKey] = useState('');
  const [turnstileSecretKey, setTurnstileSecretKey] = useState('');
  const [hasTurnstileSecret, setHasTurnstileSecret] = useState(false);
- const [blastDashboardUrl, setBlastDashboardUrl] = useState('http://172.30.30.229:8085');
+ const [blastDashboardUrl, setBlastDashboardUrl] = useState('http://localhost:8085');
  const [panelBaseUrl, setPanelBaseUrl] = useState('');
  const [copiedVal, setCopiedVal] = useState<string | null>(null);
 
@@ -279,12 +279,12 @@ export const SettingsPage: React.FC = () => {
  type='url'
  value={blastDashboardUrl}
  onChange={(e) => setBlastDashboardUrl(e.target.value)}
- placeholder='http://172.30.30.229:8085'
+ placeholder='http://localhost:8085'
  className='w-full px-3.5 py-2.5 bg-surface-sunken/60 border border-line rounded-md text-xs font-mono text-ink focus:outline-none focus:border-sea-line transition'
  required
  />
  <p className='text-[11px] text-ink-faint'>
- Contoh: <code className='text-ink-muted font-mono'>http://172.30.30.229:8085</code> atau domain kustom Anda.
+ Contoh: <code className='text-ink-muted font-mono'>http://localhost:8085</code> atau domain kustom Anda.
  </p>
  </div>
  </div>

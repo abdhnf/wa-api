@@ -27,7 +27,17 @@
 import { getSetting } from './db.js';
 
 /** Alamat pengembangan. Hanya dipakai kalau tabel dan env sama-sama kosong. */
-export const PANEL_BASE_URL_BAWAAN = 'http://172.30.30.229:5174';
+export const PANEL_BASE_URL_BAWAAN = 'http://localhost:5174';
+
+/**
+ * Alamat pengembangan Blast Dashboard. Sama seperti di atas: hanya dipakai
+ * kalau setting `blast_dashboard_url` belum pernah diisi.
+ *
+ * Sebelumnya nilai ini ditulis ulang di empat tempat (auth.ts dua kali,
+ * pengaturan.ts, users.ts). Selain duplikasi, alamatnya menunjuk IP privat
+ * VM pengembangan sehingga tidak bisa dibuka dari perangkat pengguna.
+ */
+export const BLAST_DASHBOARD_URL_BAWAAN = 'http://localhost:8085';
 
 /**
  * Ambil basis URL panel yang sedang berlaku.

@@ -16,7 +16,7 @@ function getUserApiKey(): string {
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || (
  typeof window !== 'undefined'
  ? `${window.location.protocol}//${window.location.hostname}:3100/api/v1`
- : 'http://172.30.30.229:3100/api/v1'
+ : 'http://localhost:3100/api/v1'
 );
 
 interface EndpointDoc {
@@ -419,7 +419,7 @@ server {
   curl: `curl -s -X POST ${API_BASE}/auth/blast-launch/regenerate \\\n
  -H"X-API-Key: ${getUserApiKey()}" \\\n
  | jq .`,
-  response: '{"success": true,"token":"blst_new_...","launchUrl":"http://172.30.30.229:8085/auth/launch?token=blst_new_..."}',
+  response: '{"success": true,"token":"blst_new_...","launchUrl":"http://localhost:8085/auth/launch?token=blst_new_..."}',
  },
  {
   method: 'POST',
@@ -960,7 +960,7 @@ server {
  desc: 'Generate link peluncuran sekali pakai (One-Time Launch Token, TTL 10 menit). Membutuhkan PIN akun sudah tersetting.',
  auth: 'JWT atau X-API-Key',
  curl: `curl -s -X POST ${API_BASE}/auth/blast-launch \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
- response: '{"success": true,"token":"blst_7fa8b9c...","launchUrl":"http://172.30.30.229:8085/auth/launch?token=blst_7fa8b9c...","expiresInSeconds": 600,"hasBlastPin": true}',
+ response: '{"success": true,"token":"blst_7fa8b9c...","launchUrl":"http://localhost:8085/auth/launch?token=blst_7fa8b9c...","expiresInSeconds": 600,"hasBlastPin": true}',
  },
  {
  method: 'POST',
