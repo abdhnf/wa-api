@@ -6,6 +6,52 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
+## [Unreleased] — Perbaikan normalisasi nomor & IP privat di nilai bawaan
+
+Dua bug yang ditemukan saat menulis uji untuk decision log. Keduanya berjenis
+sama: **tidak memunculkan error**, hanya menghasilkan nilai yang "kelihatan
+benar" padahal salah.
+
+### Fixed
+
+- **Awalan internasional `00` pada nomor telepon** (`backend/src/phone.ts`).
+  `006281234567890` dinormalisasi menjadi `62006281234567890` — nomor yang tidak
+  pernah ada. Penyebabnya, awalan `00` masuk ke cabang `startsWith('0')` sehingga
+  nol pertama dibuang lalu `62` ditambahkan di depannya. `normalisasiNomor()`
+  dipakai pendaftaran user, penambahan user oleh admin, dan onboarding — jadi
+  nomor yang ditulis dengan cara internasional ditolak sebagai tidak valid.
+- **`hashRecipient()` punya aturan normalisasi sendiri** (`backend/src/db/decision-log.ts`).
+  Sebelumnya hanya mengubah awalan `0` menjadi `62`, sehingga menyimpang dari
+  jalur kirim untuk nomor berawalan `00` dan nomor tanpa awalan. Akibatnya satu
+  penerima bisa menghasilkan dua hash berbeda, dan pengelompokan "berapa pesan
+  ke satu penerima" pecah tanpa terlihat. Kini memakai `normalisasiNomor()`
+  sebagai satu-satunya sumber bentuk kanonik.
+- **IP privat VM di 17 lokasi.** `172.30.30.229` tertanam di nilai bawaan kode
+  produksi (`panel-url.ts`, `blast_dashboard_url` di tiga berkas route), contoh
+  konfigurasi, skrip verifikasi, dan contoh di panel. Di produksi alamat itu
+  menghasilkan tautan yang tidak bisa dibuka pengguna tanpa error apa pun. Nilai
+  bawaan kini `localhost`; setting di produksi sudah terisi domain publik
+  sehingga tidak terpengaruh.
+
+### Changed
+
+- **Alamat bawaan Blast Dashboard disatukan.** Sebelumnya ditulis ulang di empat
+  tempat (`auth.ts` dua kali, `pengaturan.ts`, `users.ts`). Kini satu konstanta
+  `BLAST_DASHBOARD_URL_BAWAAN`, sejajar dengan `PANEL_BASE_URL_BAWAAN`.
+- **`db/keputusan.ts` → `db/decision-log.ts`.** Satu fitur sebelumnya memakai dua
+  bahasa nama berkas (Indonesia di `db/`, Inggris di `antiban-decision-log.ts`).
+  Identifier yang diekspor tetap Inggris seperti seluruh kode lain.
+
+### Added
+
+- **`scripts/uji-normalisasi-nomor.mjs`** — 28 asersi: 11 varian penulisan nomor,
+  9 masukan tidak valid, konsistensi `nomorValid()`. Sebelumnya `normalisasiNomor()`
+  tidak punya uji sama sekali.
+- **Uji regresi normalisasi di `uji-decision-log.mjs`** — 7 varian penulisan nomor
+  harus bertemu di satu hash. Uji inilah yang menemukan bug `00` di atas.
+
+---
+
 ## [Unreleased] — Decision log anti-ban
 
 Sistem anti-ban punya tujuh guard yang berjalan, tapi **tidak meninggalkan jejak
@@ -25,7 +71,7 @@ ada, dicatat per evaluasi.
   (setiap antrean bangun); menyimpannya sebagai kolom di `messages` akan
   menimpa riwayat percobaan sebelumnya. Tiga index: per sesi+waktu, per
   guard+waktu, dan per `message_id` untuk menjawab "kenapa pesan ini tertahan".
-- **Modul `backend/src/db/keputusan.ts`** — `recordGuardDecision`,
+- **Modul `backend/src/db/decision-log.ts`** — `recordGuardDecision`,
   `hashRecipient`, `evaluateGuard`, `summarizeDecisions`, `listDecisions`,
   `pruneDecisions`. Murni SQL, tanpa impor domain, supaya bisa diuji tanpa
   memuat `SessionManager` beserta dependensi WhatsApp-nya.
@@ -222,7 +268,7 @@ Ringkasan: tautan reset password dan tautan pada email selamat datang membaca su
 ### Fixed
 
 - **Tautan reset password mengabaikan tabel `settings`** (`backend/src/password-reset.ts`).
-  Baris ini membaca `process.env.PANEL_BASE_URL` sendiri, sementara `notifikasi-email.ts` membaca tabel `settings` lebih dulu. Nilai cadangannya alamat pengembangan (`http://172.30.30.229:5174`), jadi di produksi tautan yang sampai ke pengguna tidak bisa dibuka — tanpa satu pun error.
+  Baris ini membaca `process.env.PANEL_BASE_URL` sendiri, sementara `notifikasi-email.ts` membaca tabel `settings` lebih dulu. Nilai cadangannya alamat pengembangan (`http://localhost:5174`), jadi di produksi tautan yang sampai ke pengguna tidak bisa dibuka — tanpa satu pun error.
 
 ### Added
 
