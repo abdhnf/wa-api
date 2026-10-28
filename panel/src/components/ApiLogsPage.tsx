@@ -2,22 +2,34 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
  Activity, RefreshCw, Trash2, CheckSquare, Square,
  Filter, AlertCircle, AlertTriangle, CheckCircle2, Clock, Globe, ShieldAlert,
- ChevronLeft, ChevronRight, Loader2, ArrowUpDown
-} from 'lucide-react';
+ ChevronLeft, ChevronRight, Loader2, ArrowUpDown, Lock
+ } from 'lucide-react';
 import { apiGetApiLogs, apiDeleteApiLogs, apiClearApiLogs } from '../api';
+import { ringkasPerubahan as ringkas, bisaDihapus as bolehHapus } from '../lib/perubahanAudit';
 
 interface ApiLogItem {
- id: string;
- userId: string;
- userName?: string;
- userEmail?: string;
- method: string;
- endpoint: string;
- statusCode: number;
- ip: string;
- durationMs: number;
- errorMessage?: string | null;
- createdAt: string;
+  id: string;
+  userId: string;
+  userName?: string;
+  userEmail?: string;
+  method: string;
+  endpoint: string;
+  statusCode: number;
+  ip: string;
+  durationMs: number;
+  errorMessage?: string | null;
+  /**
+   * Kolom audit. Server sudah mengisinya sejak `f32f814` dan `8d8ce74`, tetapi
+   * keenamnya sebelumnya tidak pernah dideklarasikan di sini — sehingga datanya
+   * tersimpan tanpa satu pun tempat di panel yang bisa membacanya.
+   */
+  actor?: string | null;
+  targetType?: string | null;
+  targetId?: string | null;
+  params?: string | null;
+  paramsBefore?: string | null;
+  audit?: boolean;
+  createdAt: string;
 }
 
 interface ApiLogsPageProps {
@@ -73,12 +85,16 @@ export const ApiLogsPage: React.FC<ApiLogsPageProps> = ({ isAdmin, showToast }) 
  fetchLogs();
  }, [fetchLogs]);
 
+ // Baris bukti audit tidak bisa dihapus non-admin (ditegakkan di `deleteApiLogs`).
+ const bisaDihapus = (log: ApiLogItem) => bolehHapus(log, isAdmin);
+
  const handleSelectAll = () => {
- if (selectedIds.length === logs.length) {
- setSelectedIds([]);
- } else {
- setSelectedIds(logs.map((l) => l.id));
- }
+   const dapat = logs.filter(bisaDihapus).map((l) => l.id);
+   if (dapat.length > 0 && dapat.every((id) => selectedIds.includes(id))) {
+     setSelectedIds([]);
+   } else {
+     setSelectedIds(dapat);
+   }
  };
 
  const handleToggleRow = (id: string) => {
@@ -92,7 +108,12 @@ export const ApiLogsPage: React.FC<ApiLogsPageProps> = ({ isAdmin, showToast }) 
  setConfirmModal({
  isOpen: true,
  title: `Hapus ${selectedIds.length} Log Terpilih`,
- message: `Riwayat ${selectedIds.length} entri log API terpilih akan dihapus permanen dari database. Tindakan ini tidak dapat dibatalkan.`,
+ message:
+   `Riwayat ${selectedIds.length} entri log API terpilih akan dihapus permanen dari database. ` +
+   `Tindakan ini tidak dapat dibatalkan.` +
+   (isAdmin
+     ? ''
+     : ' Baris bukti audit tidak akan terhapus — hanya admin yang bisa menghapusnya.'),
  confirmText: 'Ya, Hapus Log',
  confirmVariant: 'danger',
  onConfirm: async () => {
@@ -201,7 +222,8 @@ export const ApiLogsPage: React.FC<ApiLogsPageProps> = ({ isAdmin, showToast }) 
  );
  };
 
- const isAllSelected = logs.length > 0 && selectedIds.length === logs.length;
+ const dapatDipilih = logs.filter(bisaDihapus).map((l) => l.id);
+ const isAllSelected = dapatDipilih.length > 0 && dapatDipilih.every((id) => selectedIds.includes(id));
 
  return (
  <div className="space-y-6">
@@ -321,6 +343,8 @@ export const ApiLogsPage: React.FC<ApiLogsPageProps> = ({ isAdmin, showToast }) 
  </th>
  <th className="py-3 px-4 w-24">Method</th>
  <th className="py-3 px-4">Endpoint</th>
+ <th className="py-3 px-4 w-28">Agen</th>
+ <th className="py-3 px-4 w-56">Perubahan</th>
  <th className="py-3 px-4 w-32">Status</th>
  <th className="py-3 px-4 w-24">Latency</th>
  <th className="py-3 px-4 w-36">IP Asal</th>
@@ -332,18 +356,19 @@ export const ApiLogsPage: React.FC<ApiLogsPageProps> = ({ isAdmin, showToast }) 
  <tbody className="divide-y divide-line/60 text-xs">
  {loading && logs.length === 0 ? (
  <tr>
- <td colSpan={isAdmin ? 9 : 8} className="py-12 text-center text-ink-muted">
- <Loader2 className="w-6 h-6 animate-spin mx-auto text-sea mb-2" />
+ <td colSpan={isAdmin ? 11 : 10} className="py-12 text-center text-ink-muted">
+   <Loader2 className="w-6 h-6 animate-spin mx-auto text-sea mb-2" />
  <span>Memuat log aktivitas...</span>
  </td>
  </tr>
  ) : logs.length === 0 ? (
  <tr>
- <td colSpan={isAdmin ? 9 : 8} className="py-12 text-center text-ink-muted">
- <Activity className="w-8 h-8 mx-auto text-ink-faint mb-2" />
+ <td colSpan={isAdmin ? 11 : 10} className="py-12 text-center text-ink-muted">
+   <Activity className="w-8 h-8 mx-auto text-ink-faint mb-2" />
  <p className="font-semibold text-ink-soft">Belum ada riwayat log API</p>
  <p className="text-[11px] text-ink-faint mt-0.5">
- Log request mutasi (POST, PATCH, DELETE) dan error akan tercatat secara otomatis di sini.
+ Log request mutasi (POST, PUT, PATCH, DELETE), error, dan pembacaan oleh agen
+ (yang membawa <span className="font-mono">X-MCP-Actor</span>) tercatat otomatis di sini.
  </p>
  </td>
  </tr>
@@ -358,22 +383,62 @@ export const ApiLogsPage: React.FC<ApiLogsPageProps> = ({ isAdmin, showToast }) 
  }`}
  >
  <td className="py-3 px-4 text-center">
- <button
- onClick={() => handleToggleRow(log.id)}
- className="text-ink-muted hover:text-surface cursor-pointer"
- >
- {isSelected ? (
- <CheckSquare className="w-4 h-4 text-sea" />
- ) : (
- <Square className="w-4 h-4 text-ink-faint" />
- )}
- </button>
+   {bisaDihapus(log) ? (
+     <button
+       onClick={() => handleToggleRow(log.id)}
+       className="text-ink-muted hover:text-surface cursor-pointer"
+     >
+       {isSelected ? (
+         <CheckSquare className="w-4 h-4 text-sea" />
+       ) : (
+         <Square className="w-4 h-4 text-ink-faint" />
+       )}
+     </button>
+   ) : (
+     <Lock className="w-3.5 h-3.5 text-ink-faint mx-auto" aria-label="Bukti audit, terkunci" />
+   )}
  </td>
  <td className="py-3 px-4 font-mono">{getMethodBadge(log.method)}</td>
  <td className="py-3 px-4 font-mono text-[11px] text-ink">
  <div className="truncate max-w-[280px]" title={log.endpoint}>
  {log.endpoint}
  </div>
+ </td>
+ <td className="py-3 px-4">
+   {log.actor ? (
+     <span
+       className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold rounded bg-sea-wash/60 text-sea border border-sea-line/30"
+       title={`Label yang dikirim klien lewat X-MCP-Actor. Header ini bisa dipalsukan — ini label, bukan identitas terverifikasi.`}
+     >
+       {log.actor}
+     </span>
+   ) : (
+     <span className="text-[11px] text-ink-faint">—</span>
+   )}
+ </td>
+ <td className="py-3 px-4">
+   {(() => {
+     const p = ringkas(log.params, log.paramsBefore);
+     return (
+       <div className="max-w-[220px]">
+         <div
+           className={`font-mono text-[10px] truncate ${
+             p.bahaya ? 'text-clay font-semibold' : 'text-ink-soft'
+           }`}
+           title={p.teks}
+         >
+           {p.bahaya && <AlertTriangle className="inline w-3 h-3 mr-1 -mt-0.5" />}
+           {p.teks}
+         </div>
+         {p.catatan && (
+           <div className="text-[9px] text-ink-faint leading-tight mt-0.5">{p.catatan}</div>
+         )}
+         {log.params && (
+           <div className="text-[9px] text-ink-faint leading-tight">nilai tersaring</div>
+         )}
+       </div>
+     );
+   })()}
  </td>
  <td className="py-3 px-4">{getStatusBadge(log.statusCode)}</td>
  <td className="py-3 px-4 font-mono text-ink-muted">
@@ -395,14 +460,20 @@ export const ApiLogsPage: React.FC<ApiLogsPageProps> = ({ isAdmin, showToast }) 
  {formatWib(log.createdAt)}
  </td>
  <td className="py-3 px-4 text-center">
- <button
- onClick={() => handleDeleteSingle(log.id)}
- disabled={deleting}
- className="p-1.5 text-ink-faint hover:text-clay hover:bg-clay/10 rounded-lg transition cursor-pointer"
- title="Hapus baris log ini"
- >
- <Trash2 className="w-3.5 h-3.5" />
- </button>
+   {bisaDihapus(log) ? (
+     <button
+       onClick={() => handleDeleteSingle(log.id)}
+       disabled={deleting}
+       className="p-1.5 text-ink-faint hover:text-clay hover:bg-clay/10 rounded-lg transition cursor-pointer"
+       title="Hapus baris log ini"
+     >
+       <Trash2 className="w-3.5 h-3.5" />
+     </button>
+   ) : (
+     <span title="Bukti audit — hanya admin yang bisa menghapus">
+       <Lock className="w-3.5 h-3.5 text-ink-faint mx-auto" />
+     </span>
+   )}
  </td>
  </tr>
  );
@@ -477,7 +548,16 @@ export const ApiLogsPage: React.FC<ApiLogsPageProps> = ({ isAdmin, showToast }) 
  </div>
 
  <p className="text-xs text-ink-soft">
- Pembersihan ini akan menghapus catatan request dari database secara permanen untuk menjaga ukuran SQLite tetap ramping.
+   Pembersihan ini menghapus catatan request secara permanen untuk menjaga ukuran SQLite
+   tetap ramping.
+   {isAdmin
+     ? ' Sebagai admin, baris bukti audit ikut terhapus.'
+     : ' Baris bukti audit tidak ikut terhapus — hanya admin yang bisa menghapusnya.'}
+ </p>
+ <p className="text-[11px] text-ink-faint">
+   Retensi otomatis sudah berjalan di server: baris audit disimpan 90 hari, catatan
+   galat 30 hari. Pembersihan manual di sini untuk kebutuhan mendesak, bukan retensi
+   rutin.
  </p>
 
  <div className="space-y-2 pt-2">
@@ -503,7 +583,9 @@ export const ApiLogsPage: React.FC<ApiLogsPageProps> = ({ isAdmin, showToast }) 
  setConfirmModal({
  isOpen: true,
  title: 'Hapus SELURUH Riwayat Log',
- message: 'PERINGATAN KRUSIAL: Tindakan ini akan mengosongkan seluruh tabel riwayat log API tanpa tersisa. Data audit sebelumnya tidak dapat dipulihkan!',
+ message: isAdmin
+   ? 'PERINGATAN KRUSIAL: Tindakan ini akan mengosongkan seluruh tabel riwayat log API tanpa tersisa, termasuk baris bukti audit. Data tidak dapat dipulihkan!'
+   : 'Tindakan ini menghapus seluruh catatan galat milik Anda. Baris bukti audit TIDAK ikut terhapus — hanya admin yang bisa menghapusnya.',
  confirmText: 'Hapus Semua Sekarang',
  confirmVariant: 'danger',
  onConfirm: () => handleClearAll(),

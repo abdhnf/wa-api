@@ -6,6 +6,74 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 
 ---
 
+## [Unreleased] — kolom audit tampil di panel
+
+Langkah 1 dari `docs/rancangan-menu-mcp.md`. Data audit sudah tersimpan sejak
+`f32f814` dan `8d8ce74`, tetapi `ApiLogItem` tidak punya keenam field-nya —
+sehingga tidak ada satu tempat pun di panel yang bisa membacanya.
+
+### Added
+
+- `ApiLogItem` + `actor`, `targetType`, `targetId`, `params`, `paramsBefore`,
+  `audit`; dua kolom baru di tabel: **Agen** dan **Perubahan**.
+- `panel/src/lib/perubahanAudit.ts` — formatter "nilai lama → nilai baru",
+  dipisah dari komponen karena di sinilah letak keputusan yang menentukan
+  benar-tidaknya pembacaan, bukan urusan tata letak.
+
+### Aturan tampilan yang ditetapkan
+
+- **`params_before` NULL berarti "nilai lama tidak dicatat untuk aksi ini"**,
+  bukan "tidak ada perubahan". Baris tampil `preset: → broadcast` dengan catatan
+  kecil, bukan `—`. Dua keadaan ini dibedakan karena menyamakannya membuat
+  pembaca menyimpulkan kebalikan dari yang terjadi.
+- **Nilai lama ada, nilai baru kosong** tampil `preset: strict → ∅` — bukan `—`.
+- **Baris `403`/`429` tetap tampil** dengan `—`: permintaan ditolak sebelum
+  handler berjalan, jadi memang belum melakukan apa pun.
+- **Perubahan menjadi preset `broadcast` ditandai bahaya**, karena pada preset
+  itu `contactGraph` dan `replyRatio` tidak berjalan — "allow" di sana berarti
+  "dimatikan", bukan "diperiksa dan aman".
+- **`params` diberi keterangan "nilai tersaring"**; tidak ada tombol "lihat nilai
+  asli", karena nilai aslinya memang tidak disimpan.
+- **Tombol hapus & checkbox disembunyikan untuk baris audit non-admin**, diganti
+  ikon kunci. Menampilkan tombol yang pasti gagal lebih buruk daripada tidak
+  menampilkannya, dan mencentangnya membuat "hapus 5" menghasilkan "3 dihapus"
+  tanpa penjelasan. `select-all` ikut melewati baris terkunci.
+- Teks modal pembersihan diperbaiki: sebelumnya menjanjikan seluruh log terhapus,
+  padahal untuk non-admin baris audit tidak ikut — dan retensi otomatis sudah
+  berjalan di server, jadi pembersihan manual bukan lagi retensi rutin.
+
+### Catatan pengujian
+
+`uji-perubahan-audit-panel.mjs` — 25 asersi, **plus pembanding mutasi**. Tiga
+mutasi sengaja dijalankan:
+
+| Mutasi | Hasil |
+|---|---|
+| hapus catatan "nilai lama tidak dicatat" | tertangkap (21/25) |
+| tanda bahaya `broadcast` dimatikan | tertangkap (19/25) |
+| `if (!baru && !lama)` → `if (!baru)` | **LOLOS 22/22 pada percobaan pertama** |
+
+Mutasi ketiga membongkar lubang nyata di uji saya: tidak ada kasus "nilai lama
+ada, nilai baru kosong", padahal formatter punya cabangnya dan baris seperti itu
+nyata (DELETE dengan body kosong). Setelah kasus itu ditambahkan, mutasinya
+tertangkap (23/25).
+
+`uji-e2e-kolom-audit.sh` — 15 asersi lewat HTTP pada server sungguhan. Uji unit
+membuktikan formatter benar untuk input yang saya karang sendiri; uji ini
+membuktikan server benar-benar **mengirim** kolomnya. Tanpa itu, satu salah tulis
+nama kolom di `listApiLogs` akan lolos semua uji unit dan tabelnya tetap kosong.
+Termasuk: nomor telepon di `params` tidak terkirim mentah ke panel.
+
+Uji ini sendiri sempat salah lapor: blok node mencetak `OK` untuk 12 asersi
+tetapi bash hanya menghitung 2, sehingga ringkasannya berbunyi "2 lulus". Sudah
+diperbaiki agar bash yang menghitung, bukan node yang mencetak.
+
+Regresi: celah-audit 11/11, api-logs-audit 11/11, tenant 32/32, qr-jwt 4/4,
+audit-params 64/64, decision-log 39/39, integrasi 22/22, normalisasi 28/28,
+uji-mcp 37/37; `tsc` panel 0 error; build panel OK.
+
+---
+
 ## [Unreleased] — rancangan menu MCP di panel
 
 `docs/rancangan-menu-mcp.md` — rancangan, belum ada kode.
