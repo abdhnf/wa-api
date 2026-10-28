@@ -275,8 +275,10 @@ kedua yang menampilkan tabel yang sama mahal.
 
 ## 7. Urutan pengerjaan
 
-1. `ApiLogItem` + kolom Agen & Perubahan di `ApiLogsPage.tsx` — **paling kecil,
-   paling cepat berguna.** Data sudah ada; ini hanya menampilkannya.
+1. ~~`ApiLogItem` + kolom Agen & Perubahan di `ApiLogsPage.tsx`.~~ **Selesai
+   (`6ab53d0`).** Formatter dipisah ke `panel/src/lib/perubahanAudit.ts` agar
+   bisa diuji; 25 asersi + pembanding mutasi, dan uji e2e 15 asersi yang
+   membuktikan server benar-benar mengirim kolomnya.
 2. `GET /api/v1/mcp/activity` + `GET /api/v1/mcp/usage` + uji isolasi tenant
    untuk keduanya (non-admin tidak boleh melihat aktivitas pengguna lain).
 3. `McpPage.tsx` lapis A.
