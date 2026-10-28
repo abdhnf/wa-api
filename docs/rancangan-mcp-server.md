@@ -94,36 +94,78 @@ ada — dan memberi agen milik user biasa jalan yang rapi menuju data user lain.
 Menutup celah ini adalah **pekerjaan tersendiri (Bagian 7.1)**, bukan bagian
 dari MCP, dan harus selesai lebih dulu.
 
-### 2.2 `api_logs` tidak mencatat GET yang berhasil
+### 2.2 Audit **adalah** hasil permintaan — bukan catatan terpisah
 
-Hook `onResponse` (`routes/konteks.ts:23-56`) melewati setiap `GET` dengan status
-`< 400`:
+Koreksi terhadap rancangan awal dokumen ini. Rancangan pertama mengusulkan tabel
+`mcp_audit` yang **ditulis oleh MCP** setiap kali sebuah tool tulis dipanggil.
+Itu keliru, dan alasannya bukan soal selera:
+
+- **Server sudah melihat setiap permintaan.** Hook `onResponse`
+  (`routes/konteks.ts:23-56`) berjalan untuk seluruh request. Menyuruh MCP
+  menulis baris audit berarti satu aksi menghasilkan **dua** catatan yang bisa
+  berbeda isinya.
+- **MCP menjadi saksi atas perbuatannya sendiri.** Kalau MCP yang menulis
+  "saya mengubah preset sesi X", server tidak punya cara memverifikasinya. Bukti
+  yang dilaporkan pihak yang diawasi bukan bukti.
+- **Menambah satu endpoint tulis yang justru bisa disalahgunakan.** `POST
+  /mcp/audit` harus menerima `tool`, `arguments`, dan `result` dari pemanggil —
+  artinya user bisa menulis baris audit palsu, dan rancangan harus menambal itu
+  dengan daftar putih nama tool. Tambalan yang tidak perlu kalau audit diambil
+  dari request itu sendiri.
+
+Jadi arah yang benar: **`api_logs` dinaikkan menjadi audit, bukan dibuat tabel
+kedua.** Satu permintaan, satu baris. Yang perlu dibereskan tinggal dua hal, dan
+keduanya cacat pada `api_logs` yang sudah ada — bukan cacat MCP.
+
+### 2.3 Cacat pertama: `api_logs` membuang GET yang berhasil
 
 ```ts
 if (method === 'GET' && statusCode < 400) return;
 ```
 
-Artinya **seluruh tool baca MCP tidak akan meninggalkan jejak apa pun** di
-`api_logs`. Kalau MCP hanya mengandalkan `api_logs`, pertanyaan "agen siapa
-membaca data apa" tidak akan pernah bisa dijawab untuk operasi baca.
+Filter ini masuk akal untuk panel, yang melakukan polling GET terus-menerus
+sehingga log akan penuh sampah. Tetapi untuk MCP, **operasi baca justru
+pekerjaan utamanya** — tujuh dari dua belas tool adalah baca. Dengan filter ini,
+seluruh aktivitas audit MCP tidak meninggalkan jejak sama sekali, sehingga
+pertanyaan "agen siapa membaca data sesi siapa" tidak bisa dijawab.
 
-### 2.3 `api_logs` mencatat pelaku, tapi tidak bisa membedakan agen dari manusia
+Perbaikannya bukan menghapus filter (panel akan membanjiri log), melainkan
+membuatnya **selektif**: permintaan yang membawa penanda agen tetap dicatat
+walaupun `GET` dan berhasil.
 
-Kolom `api_logs`: `id, user_id, method, endpoint, status_code, ip, duration_ms,
-error_message, created_at`. `user_id` terisi dari `req.apiKeyUser`, jadi pelaku
-tercatat. Tetapi tidak ada penanda bahwa permintaan itu datang dari MCP, bukan
-dari panel atau curl manusia. `ip` juga tidak menolong: MCP berjalan di VM yang
-sama, jadi `ip`-nya `127.0.0.1` — sama dengan siapa pun yang menjalankan curl di
-sana.
+### 2.4 Cacat kedua: `api_logs` tidak punya kolom untuk pelaku dan sasaran
 
-### 2.4 Tidak ada konsep scope; API key = seluruh hak pemiliknya
+Kolom sekarang: `id, user_id, method, endpoint, status_code, ip, duration_ms,
+error_message, created_at`.
+
+Yang sudah benar: `user_id` terisi dari `req.apiKeyUser`, jadi **pelaku tercatat
+dan tidak bisa dipalsukan** — nilainya berasal dari kunci API yang diverifikasi
+server, bukan dari klaim pemanggil.
+
+Yang belum ada:
+
+- **Penanda agen.** Tidak ada cara membedakan permintaan dari MCP dan dari panel.
+  `ip` tidak menolong: MCP berjalan di VM yang sama, jadi `ip`-nya `127.0.0.1` —
+  sama dengan siapa pun yang menjalankan curl di sana.
+- **Sasaran.** `endpoint` memuat `/api/v1/sessions/sess-mtvs3tj5/queue/pause`,
+  jadi id sesi sebenarnya ada di dalam string — tetapi mengekstraknya dengan
+  pencocokan teks rapuh. Lebih baik disimpan sebagai kolom.
+- **Parameter aksi tulis.** Tanpa ini, audit hanya bisa bilang "seseorang
+  memanggil `PUT /antiban`", bukan "preset diubah **menjadi** `broadcast`" —
+  padahal nilai barunya justru yang ingin diketahui.
+
+Ketiganya bisa diisi server sendiri dari permintaan yang sedang ia tangani:
+`actor` dari header, `target_id` dari `req.params`, `params` dari `req.body`.
+Tidak ada yang perlu dilaporkan MCP.
+
+### 2.5 Tidak ada konsep scope; API key = seluruh hak pemiliknya
 
 `requireAuth` (`auth.ts:38-52`) hanya memeriksa: kunci ada, user ditemukan,
 `status === 'active'`. Tidak ada scope, tidak ada pembatasan endpoint. Jadi API
 key milik user biasa memberi akses ke **semua** endpoint yang tidak memeriksa
 kepemilikan — termasuk yang menulis.
 
-### 2.5 Rate limit per IP, bukan per user
+### 2.6 Rate limit per IP, bukan per user
 
 `rateLimitHook` (`security.ts:115`) memakai `getClientIp(req)` sebagai kunci,
 dengan batas `240 req/menit` global dan `30 req/menit` untuk `/auth/*`. Karena
@@ -131,7 +173,7 @@ MCP berjalan di `localhost`, seluruh trafik MCP berbagi satu ember rate limit
 dengan trafik lokal lain. Satu agen yang berisik bisa menghabiskan kuota untuk
 semua.
 
-### 2.6 Data yang dibutuhkan audit sudah tersedia lewat API
+### 2.7 Data yang dibutuhkan audit sudah tersedia lewat API
 
 Ini yang membuat rancangan layak: hampir semua bahan audit sudah bisa dibaca
 lewat HTTP, tanpa SQL langsung.
@@ -154,13 +196,13 @@ dulu."`, `"Gagal mengunduh media: HTTP 404"`), dan 65 pesan `cancelled` memuat
 `"Kampanye ... dihentikan oleh pengguna"`. Ini penting: audit bisa menjawab
 "kenapa" untuk sebagian besar kegagalan tanpa membuka DB.
 
-### 2.7 Preset anti-ban bisa diaudit karena tersimpan di kolom sesi
+### 2.8 Preset anti-ban bisa diaudit karena tersimpan di kolom sesi
 
 `getSessionAntiBanSettings()` membaca `sessions.antiban_preset` dan
 `sessions.antiban_config`. Jadi perubahan preset meninggalkan jejak yang bisa
 dibaca kembali — bukan state yang hanya hidup di memori.
 
-### 2.8 Volume yang akan dihadapi MCP
+### 2.9 Volume yang akan dihadapi MCP
 
 Dari 30 hari terakhir di produksi: `read` 144, `delivered` 93, `cancelled` 65,
 `sent` 12, `failed` 9, `queued` 3, `not_registered` 1. Total ~327 pesan/30 hari
@@ -232,66 +274,95 @@ Konsekuensi yang harus disadari dan diterima:
 
 ### 3.4 Penanda agen: header `X-MCP-Actor`
 
-Setiap permintaan MCP menyertakan header tambahan:
+Setiap permintaan MCP menyertakan satu header tambahan:
 
 ```
 X-MCP-Actor: hermes-abdhnf
-X-MCP-Tool: wa_audit_session
 ```
 
-Backend **tidak** mengubah perilaku berdasarkan header ini — ia hanya diteruskan
-ke `api_logs` sebagai bagian dari `endpoint` atau kolom baru. Tujuannya
-keterlacakan, bukan otorisasi. Kalau header ini hilang, tidak ada yang rusak;
-yang hilang hanya kemampuan membedakan agen dari manusia.
+Backend **tidak** mengubah perilaku berdasarkan header ini selain satu hal:
+memakainya untuk memutuskan apakah GET yang berhasil tetap dicatat (3.6). Ia
+tidak memberi hak apa pun. Tujuannya keterlacakan, bukan otorisasi. Kalau header
+ini hilang, tidak ada yang rusak; yang hilang hanya kemampuan membedakan agen
+dari manusia.
 
-### 3.5 Tabel audit khusus aksi tulis
+Header `X-MCP-Tool` dari rancangan awal **dihapus**. Alasannya: nama tool MCP
+tidak menambah informasi dibanding `method` + `endpoint` yang sudah dicatat
+server, dan header tambahan yang tidak dipakai hanya menambah permukaan yang
+harus dijaga. Satu header, satu kegunaan.
 
-Karena `api_logs` melewati `GET` yang berhasil (2.2) dan tidak menyimpan
-parameter, aksi tulis MCP dicatat ke tabel sendiri:
+### 3.5 Audit: perluas `api_logs`, jangan buat tabel kedua
 
-```sql
-CREATE TABLE IF NOT EXISTS mcp_audit (
-  id             TEXT PRIMARY KEY,
-  actor          TEXT,              -- label dari X-MCP-Actor
-  user_id        TEXT NOT NULL,     -- pemilik API key (dari wa-api, bukan dari MCP)
-  tool           TEXT NOT NULL,     -- nama tool MCP
-  target_type    TEXT,              -- 'session' | 'batch' | 'message'
-  target_id      TEXT,
-  arguments      TEXT,              -- JSON parameter, sudah disaring
-  result_status  TEXT NOT NULL,     -- 'ok' | 'denied' | 'error'
-  result_summary TEXT,              -- ringkasan hasil, bukan seluruh respons
-  duration_ms    INTEGER,
-  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_mcp_audit_user_time ON mcp_audit (user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_mcp_audit_tool_time ON mcp_audit (tool, created_at DESC);
+Karena audit adalah hasil permintaan itu sendiri (2.2), tidak ada tabel baru dan
+tidak ada endpoint tulis baru. Yang dilakukan: menambah empat kolom pada
+`api_logs` yang sudah ada, memakai pola `ensureColumn` yang sudah dipakai repo
+(`db/skema.ts:102-107`) sehingga baris lama tidak terganggu.
+
+```ts
+// db/skema.ts — di samping ensureColumn lain yang sudah ada
+ensureColumn('api_logs', 'actor', 'TEXT');       // label agen dari X-MCP-Actor
+ensureColumn('api_logs', 'target_type', 'TEXT'); // 'session' | 'batch' | 'message'
+ensureColumn('api_logs', 'target_id', 'TEXT');   // id sasaran
+ensureColumn('api_logs', 'params', 'TEXT');      // JSON body, sudah disaring
+CREATE INDEX IF NOT EXISTS idx_api_logs_actor_time ON api_logs (actor, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_api_logs_target      ON api_logs (target_id) WHERE target_id IS NOT NULL;
 ```
 
-Dua keputusan penting di sini:
+Semua nilai diisi **oleh server**, dari permintaan yang sedang ia tangani:
 
-- **`user_id` diambil dari wa-api, bukan dari MCP.** MCP tidak boleh menjadi
-  sumber kebenaran tentang siapa pelakunya; kalau ia bisa, ia bisa berbohong.
-  Cara mengambilnya: respons `GET /auth/me` dengan kunci yang sama, di-cache
-  per proses.
-- **`arguments` disaring, bukan disalin mentah.** Nomor telepon tidak pernah
-  masuk; yang masuk hanya hash-nya, mengikuti aturan yang sama dengan
-  `antiban_decisions`. Ini mencegah tabel audit berubah menjadi salinan data
-  pribadi.
-
-**Siapa yang menulis tabel ini?** Dua pilihan, dengan pilihan kedua yang
-diambil:
-
-| Pilihan | Masalah |
+| Kolom | Sumber di server |
 |---|---|
-| MCP menulis langsung ke `wa.db` | MCP butuh akses tulis ke DB produksi — melanggar prinsip "MCP lewat API saja", dan membuka jalur tulis yang tidak melalui validasi wa-api |
-| Endpoint baru `POST /api/v1/mcp/audit` di wa-api | Menambah endpoint tulis; tetapi pelakunya tetap `apiKeyUser` yang sudah terautentikasi, dan validasinya di satu tempat |
+| `user_id` | `req.apiKeyUser.id` — sudah ada, tidak berubah |
+| `actor` | header `X-MCP-Actor`, `null` kalau tidak ada |
+| `target_type` / `target_id` | `req.params` (`id`, `batchId`, `sessionId`) |
+| `params` | `req.body`, disaring sebelum disimpan |
 
-Dipilih: **endpoint baru**, karena MCP tetap tidak menyentuh DB, dan `user_id`
-dijamin benar oleh wa-api sendiri. Endpoint ini hanya menerima `tool`,
-`target`, `arguments` yang sudah disaring, dan `result` — tidak bisa dipakai
-membaca apa pun.
+Konsekuensi yang perlu disadari:
 
-### 3.6 Daftar tool
+- **`params` hanya diisi untuk metode yang menulis** (`POST`/`PUT`/`PATCH`/
+  `DELETE`). Menyimpan body `GET` tidak ada gunanya dan hanya menambah ukuran.
+- **Penyaringan wajib, bukan opsional.** Nomor telepon di `params` diganti
+  hash-nya, mengikuti aturan yang sama dengan `antiban_decisions`; field yang
+  mengandung kredensial (`password`, `apiKey`, `token`, `pin`) dibuang. Tanpa
+  ini, `api_logs` berubah menjadi salinan data pribadi dan kredensial.
+- **Ukuran dibatasi** (mis. 2 KB per baris) karena `bodyLimit` server 50 MB
+  untuk upload media base64 — tanpa batas, satu permintaan media bisa menulis
+  puluhan MB ke tabel log.
+
+### 3.6 Membuat filter GET selektif, bukan dihapus
+
+Filter di `onResponse` diubah supaya hanya melewati GET yang **bukan** dari agen:
+
+```ts
+// Sebelum: semua GET sukses dibuang
+if (method === 'GET' && statusCode < 400) return;
+
+// Sesudah: GET sukses tetap dibuang KECUALI membawa penanda agen
+const actor = (req.headers['x-mcp-actor'] as string | undefined) || null;
+if (method === 'GET' && statusCode < 400 && !actor) return;
+```
+
+Alasannya: panel melakukan polling GET terus-menerus, jadi menghapus filter akan
+membanjiri `api_logs`. Tetapi permintaan agen — yang volumenya kecil dan justru
+perlu ditelusuri — tetap tercatat. Dengan begitu tool baca MCP punya jejak tanpa
+mengorbankan kegunaan log untuk panel.
+
+Efek samping yang diterima: satu agen yang membaca berulang kali akan menambah
+baris log. Ini diinginkan — itulah gunanya audit.
+
+### 3.7 Tidak ada yang perlu dilaporkan MCP
+
+Ini konsekuensi penting dari koreksi di 2.2, dan yang paling menyederhanakan
+rancangan: **MCP tidak menulis apa pun ke database, dan tidak memanggil endpoint
+audit apa pun.** Ia hanya memanggil endpoint yang sudah ada. Server mencatat
+sendiri.
+
+Yang hilang dibanding rancangan awal: kolom `result_summary` (ringkasan hasil
+yang dilaporkan MCP). Penggantinya sudah ada di `api_logs`: `status_code` dan
+`error_message`. Itu lebih baik, karena berasal dari server — bukan dari klaim
+pemanggil.
+
+### 3.8 Daftar tool
 
 Dua belas tool, dipisah tegas antara baca dan tulis. Semua tool baca memakai
 endpoint yang **sudah menegakkan isolasi tenant** (setelah Bagian 7.1 selesai).
@@ -338,7 +409,7 @@ Batas ini bukan kehati-hatian berlebihan: `queue/clear` dan blast adalah dua
 operasi yang paling mungkin dipanggil agen secara tidak sengaja karena
 keduanya terdengar seperti "bersihkan" dan "kirim pengumuman".
 
-### 3.7 Bentuk respons: ringkas dan berorientasi jawaban
+### 3.9 Bentuk respons: ringkas dan berorientasi jawaban
 
 MCP mengembalikan teks terstruktur, bukan JSON mentah seluruh respons API.
 Contoh untuk `wa_audit_antiban`:
@@ -362,7 +433,7 @@ berukuran besar karena memuat **semua** definisi preset (strict, balanced,
 broadcast) di setiap panggilan. Mengirim itu ke konteks agen menghabiskan
 token untuk informasi yang tidak ditanyakan. MCP memilih bagian yang relevan.
 
-### 3.8 Penanganan galat: teruskan, jangan tafsirkan
+### 3.10 Penanganan galat: teruskan, jangan tafsirkan
 
 Kalau wa-api mengembalikan `403`, MCP mengembalikan `403` dengan pesan aslinya.
 Ia tidak boleh mencoba "menutupi" dengan fallback, dan tidak boleh menafsirkan
@@ -373,7 +444,7 @@ Untuk galat jaringan (`ECONNREFUSED`), MCP melaporkan bahwa backend tidak dapat
 dihubungi, **tanpa** mencoba ulang secara otomatis untuk tool tulis. Retry
 otomatis pada operasi tulis bisa menggandakan efek yang tidak idempoten.
 
-### 3.9 Konfigurasi & operasional
+### 3.11 Konfigurasi & operasional
 
 ```
 systemd: wa-mcp.service   (proses terpisah, Restart=on-failure)
@@ -393,10 +464,9 @@ dan variabel lingkungan di atas.
 | Berkas | Perubahan |
 |---|---|
 | `backend/src/routes/sessions.ts` | **Prasyarat:** tambah pemeriksaan kepemilikan di `queue/pause`, `queue/resume`, `queue/clear`, `reconnect`, `metrics`, `queue/status` |
-| `backend/src/db/skema.ts` | Tabel `mcp_audit` + 2 index |
-| `backend/src/db/mcp-audit.ts` | **Baru** — `recordMcpAction`, `listMcpAudit`. Murni SQL. |
-| `backend/src/routes/operasional.ts` | `POST /api/v1/mcp/audit` (tulis, terbatas), `GET /api/v1/mcp/audit` (baca, admin lihat semua) |
-| `backend/src/routes/konteks.ts` | Teruskan `X-MCP-Actor`/`X-MCP-Tool` ke `api_logs` |
+| `backend/src/db/skema.ts` | Empat kolom baru di `api_logs` (`actor`, `target_type`, `target_id`, `params`) + 2 index, lewat `ensureColumn` |
+| `backend/src/db/api-logs.ts` | `insertApiLog` menerima empat nilai baru; saring `params` & batasi ukurannya |
+| `backend/src/routes/konteks.ts` | Isi kolom baru dari `req`; GET sukses tetap dilewati **kecuali** membawa `X-MCP-Actor` |
 | `mcp/` (direktori baru) | **Baru** — server MCP: `package.json`, `src/index.ts`, `src/client.ts`, `src/tools/*.ts` |
 | `docs/rancangan-mcp-server.md` | Dokumen ini |
 
@@ -409,14 +479,18 @@ dan variabel lingkungan di atas.
 
 - **Tidak ada perubahan perilaku pengiriman.** MCP hanya membaca dan memanggil
   endpoint yang sudah ada.
-- **Tidak ada endpoint baru yang bisa mengirim pesan.** Batas di Bagian 3.6
+- **Tidak ada endpoint baru yang bisa mengirim pesan.** Batas di Bagian 3.8
   ditegakkan dengan tidak adanya tool, bukan dengan pemeriksaan runtime.
-- **`api_logs` bertambah kolom** (kalau `X-MCP-Actor` disimpan terpisah).
-  Penambahan kolom memakai pola `ensureColumn` yang sudah dipakai repo, jadi
-  baris lama tidak terganggu.
-- **Tabel `mcp_audit` baru**, tidak menyentuh tabel lama.
+- **`api_logs` bertambah empat kolom** lewat `ensureColumn`, jadi baris lama
+  tidak terganggu dan tetap terbaca (`actor`, `target_type`, `target_id`,
+  `params` bernilai `NULL` untuk baris lama).
+- **Volume `api_logs` naik** karena GET ber-`X-MCP-Actor` kini tercatat.
+  Perkiraannya kecil: 12 tool × beberapa panggilan per audit, bukan polling.
+- **Tidak ada tabel baru dan tidak ada endpoint baru.** Ini konsekuensi langsung
+  dari koreksi 2.2, dan yang paling mengurangi risiko: tidak ada jalur tulis
+  tambahan yang perlu diamankan.
 - **Rate limit tidak berubah.** Konsekuensinya: trafik MCP ikut memakai ember
-  per-IP `127.0.0.1` (2.5). Untuk skala sekarang (11 pesan/hari) ini tidak
+  per-IP `127.0.0.1` (2.6). Untuk skala sekarang (11 pesan/hari) ini tidak
   menjadi masalah; dicatat sebagai batas yang diketahui.
 
 ---
@@ -429,8 +503,9 @@ database produksi — mengikuti aturan yang sama dengan decision log.
 | Uji | Membuktikan |
 |---|---|
 | `uji-mcp-tenant.mjs` | User non-admin **tidak** bisa membaca/menulis sesi user lain, untuk **semua** endpoint yang dipakai MCP. Inilah uji prasyarat. |
-| `uji-mcp-audit-tulis.mjs` | Setiap tool tulis menghasilkan tepat satu baris `mcp_audit`, dengan `user_id` benar dan parameter tersaring |
-| `uji-mcp-audit-baca.mjs` | Admin melihat audit semua user; user biasa hanya melihat miliknya |
+| `uji-api-logs-actor.mjs` | Permintaan ber-`X-MCP-Actor` tercatat (termasuk GET sukses); tanpa header, GET sukses tetap tidak tercatat |
+| `uji-api-logs-params.mjs` | `params` terisi untuk aksi tulis, tersaring (nomor → hash, kredensial dibuang), dan dibatasi ukurannya |
+| `uji-api-logs-pelaku.mjs` | `user_id` berasal dari kunci, bukan dari header; admin melihat semua, user biasa hanya miliknya |
 | `uji-mcp-tool-baca.mjs` | Ketujuh tool baca mengembalikan data yang sama dengan endpoint aslinya |
 | `uji-mcp-tool-tulis.mjs` | Kelima tool tulis benar-benar mengubah state, dan bisa dibalik |
 | `uji-mcp-tolak-tulis.mjs` | Tidak ada tool yang bisa mengirim pesan, menghapus sesi, atau mengelola user — diperiksa dari daftar tool yang teregistrasi |
@@ -464,7 +539,7 @@ Urutan yang benar: **tutup celah → uji panel → baru bangun MCP.**
   sekarang masih kosong di produksi.
 - **Transport HTTP untuk MCP.** Tidak perlu selama klien berjalan di mesin yang
   sama.
-- **Tool untuk blast.** Sengaja ditolak (3.6).
+- **Tool untuk blast.** Sengaja ditolak (3.8).
 - **Rate limit per user.** Perubahan pada `security.ts` menyentuh seluruh API,
   bukan hanya MCP; pekerjaan tersendiri.
 - **UI panel untuk audit MCP.** Endpoint `GET /mcp/audit` tersedia; tampilan
@@ -480,15 +555,16 @@ Urutan yang benar: **tutup celah → uji panel → baru bangun MCP.**
    pengiriman. Ini bukan cacat, tetapi perlu diketahui agar tidak disalahartikan
    sebagai "tidak ada penolakan".
 2. **`X-MCP-Actor` bisa dipalsukan.** Siapa pun yang punya API key bisa mengirim
-   header itu. Karena itu ia **bukan** autentikasi, dan `user_id` di `mcp_audit`
-   diambil dari wa-api. Tetap dicatat sebagai batas: label agen tidak dapat
-   dipercaya sepenuhnya.
-3. **Tool baca tidak berjejak di `api_logs`.** Sesuai 2.2, `GET` sukses dilewati.
-   Jejak baca hanya ada kalau MCP memanggil `POST /mcp/audit` untuk operasi baca
-   juga — yang menambah satu tulis per baca. Keputusan yang diambil: **tidak**
-   mencatat baca, karena biayanya (satu tulis per baca) lebih besar dari
-   manfaatnya pada volume sekarang. Kalau kelak perlu jejak penuh, ini titik
-   yang harus diubah.
+   header itu — termasuk mengosongkannya supaya GET-nya tidak tercatat. Karena
+   itu ia **bukan** autentikasi, dan `user_id` di `api_logs` tetap berasal dari
+   kunci yang diverifikasi server. Yang bisa dipalsukan hanya label agennya,
+   bukan pelakunya. Batas ini diterima: alternatifnya menambah mekanisme
+   autentikasi kedua untuk MCP, yang justru menambah permukaan serangan.
+3. **Aksi tulis yang gagal sebelum mencapai handler tidak tercatat `params`-nya.**
+   Kalau permintaan ditolak `rateLimitHook` atau `requireAuth`, `onResponse`
+   tetap berjalan tetapi `req.body` mungkin belum terurai. Barisnya tetap
+   tercatat dengan `params` kosong. Ini wajar: yang ditolak belum melakukan
+   apa-apa.
 4. **Belum ada pembatasan jumlah panggilan per agen.** MCP bisa memanggil
    endpoint berulang kali sampai kena rate limit per-IP (240/menit), yang
    kuotanya dibagi dengan trafik lokal lain. Untuk skala sekarang wajar; untuk
@@ -504,16 +580,20 @@ Urutan yang benar: **tutup celah → uji panel → baru bangun MCP.**
 
 ## 9. Hal yang perlu diputuskan sebelum implementasi
 
-1. **Apakah `X-MCP-Actor` disimpan sebagai kolom baru di `api_logs`, atau
-   ditempel ke `endpoint`?** Kolom baru lebih bersih tetapi menambah migrasi;
-   menempel ke `endpoint` merusak pengelompokan endpoint yang sekarang dipakai
-   untuk statistik.
-2. **Apakah `mcp_audit` perlu retensi?** `antiban_decisions` memakai 30 hari.
-   Audit aksi tulis jauh lebih sedikit jumlahnya, jadi mungkin tidak perlu — tapi
-   keputusan itu sebaiknya diambil sadar, bukan karena lupa.
-3. **Siapa yang boleh memanggil `POST /mcp/audit`?** Kalau semua user boleh,
-   user bisa menulis baris audit palsu. Kalau hanya MCP yang boleh, perlu cara
-   membedakan MCP dari manusia — padahal itulah yang sedang dibangun. Usulan:
-   endpoint menerima `tool` hanya dari daftar putih nama tool yang dikenal, dan
-   `user_id` selalu diambil dari kunci, sehingga kebohongan yang mungkin hanya
-   pada `arguments` dan `result_summary`.
+**Sudah diputuskan:** kolom baru di `api_logs` (bukan menempel ke `endpoint`),
+dan audit diambil dari permintaan itu sendiri (bukan tabel `mcp_audit`).
+
+Yang masih terbuka:
+
+1. **Retensi `api_logs`.** Sekarang tidak ada pembersihan otomatis. Dengan GET
+   agen ikut tercatat, volumenya naik — perlu ditetapkan batas (mis. 90 hari)
+   sebelum MCP dipakai rutin. `antiban_decisions` memakai 30 hari, tetapi audit
+   permintaan biasanya disimpan lebih lama.
+2. **Apakah `params` perlu menyimpan nilai sebelum aksi?** Untuk menjawab "preset
+   diubah dari apa ke apa", `params` saja tidak cukup — ia hanya memuat nilai
+   baru. Pilihan: (a) biarkan, dan jawab "ke apa" saja; (b) tambah kolom
+   `params_before` yang diisi handler. Opsi (b) lebih lengkap tetapi menyentuh
+   setiap handler tulis.
+3. **Apakah GET ber-`X-MCP-Actor` perlu dibatasi?** Tanpa batas, satu agen bisa
+   membanjiri `api_logs` dengan pembacaan berulang. Opsi: batasi satu baris per
+   (actor, endpoint, target) per menit, atau biarkan dan andalkan retensi.
