@@ -1,12 +1,19 @@
 // Client API terpusat untuk panel frontend
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || (
+// Satu-satunya tempat API_BASE ditentukan. Jangan menyalin logika ini ke
+// komponen lain: salinan yang menyimpang tidak terlihat di dev (port 5174
+// membuat kedua versi menghasilkan alamat yang sama) tetapi salah di hosting.
+export const API_BASE = (import.meta as any).env?.VITE_API_BASE || (
   typeof window !== 'undefined'
     ? (window.location.port === '5174'
         ? `${window.location.protocol}//${window.location.hostname}:3100/api/v1`
         : `${window.location.origin}/api/v1`)
     : 'http://127.0.0.1:3100/api/v1'
 );
+
+// Origin tanpa `/api/v1`, untuk hal yang menambahkan sendiri awalan itu
+// (mis. WA_API_BASE_URL pada konfigurasi klien MCP).
+export const API_ORIGIN = API_BASE.replace(/\/api\/v1\/?$/, '');
 
 export function getStoredToken(): string | null {
   return localStorage.getItem('wa_token');

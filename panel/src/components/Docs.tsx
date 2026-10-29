@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_BASE, API_ORIGIN } from '../api';
 import {
  Sliders, BookOpen, Terminal, Copy, Check, Smartphone, MessageSquare,
  Users as UsersIcon, Webhook, Activity, ShieldCheck, Plus, FileText, Send, Eye, ScrollText,
@@ -13,15 +14,10 @@ function getUserApiKey(): string {
  return 'wa_live_YOUR_API_KEY';
 }
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || (
- typeof window !== 'undefined'
- ? `${window.location.protocol}//${window.location.hostname}:3100/api/v1`
- : 'http://localhost:3100/api/v1'
-);
-
-// Origin tanpa `/api/v1` — dipakai WA_API_BASE_URL pada konfigurasi MCP, yang
-// menambahkan sendiri awalan itu.
-const API_ORIGIN = API_BASE.replace(/\/api\/v1\/?$/, '');
+// API_BASE dan API_ORIGIN diimpor dari ../api — jangan didefinisikan ulang di
+// sini. Versi lokal sebelumnya selalu menempelkan :3100 pada hostname, yang
+// benar di VM dev tetapi menghasilkan alamat mati di hosting (port 3100 tidak
+// diekspos; API ada di /api/v1 pada domain yang sama).
 
 interface EndpointDoc {
  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
