@@ -19,6 +19,10 @@ const API_BASE = (import.meta as any).env?.VITE_API_BASE || (
  : 'http://localhost:3100/api/v1'
 );
 
+// Origin tanpa `/api/v1` — dipakai WA_API_BASE_URL pada konfigurasi MCP, yang
+// menambahkan sendiri awalan itu.
+const API_ORIGIN = API_BASE.replace(/\/api\/v1\/?$/, '');
+
 interface EndpointDoc {
  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
  path: string;
@@ -372,6 +376,87 @@ server {
  text: 'Parameter sessionId dapat diisi dengan ID sesi spesifik (misal: sess-mttrskn5) atau gunakan nilai"auto" agar sistem secara otomatis merotasi nomor yang tersedia di akun Anda.'
  }
  }
+ ]
+ },
+ {
+ id: 'mcp',
+ label: '04. MCP untuk Agen AI',
+ category: 'system',
+ icon: <Zap size={15} />,
+ intro: 'Server MCP (mcp/) membungkus sebagian wa-api menjadi tool untuk agen AI (Claude Desktop, Cursor, VS Code, dan klien MCP lain). Ia bagian dari proyek ini dan dijalankan dari checkout proyek, bukan paket npm — jadi wajib dibangun lebih dulu di mesin yang menjalankan klien MCP.',
+ guideBlocks: [
+ {
+ title: 'Yang dibutuhkan',
+ items: [
+ { label: 'Node.js', value: '>= 20', desc: 'Dipakai klien MCP untuk menjalankan dist/index.js hasil build. Tidak ada port yang dibuka; transportnya stdio.' },
+ { label: 'API Key pribadi', value: 'wajib', desc: 'Ambil dari menu Users & API Keys. Kunci ini adalah identitas Anda: batas akses agen sama dengan batas akses akun Anda, tidak lebih.' },
+ { label: 'WA_API_BASE_URL', value: API_ORIGIN, desc: 'Alamat wa-api yang Anda pakai. Nilai di samping sudah diisi sesuai panel yang sedang Anda buka.' },
+ { label: 'WA_MCP_ACTOR', value: 'opsional', desc: 'Nama agen, dipakai sebagai label pada kolom Agen di API Logs. Isi dengan nama yang bisa Anda kenali, misal hermes-nama-anda.' },
+ ]
+ },
+ {
+ title: '1. Bangun server MCP',
+ desc: 'Dijalankan sekali di mesin yang akan menjalankan klien MCP. dist/ tidak ikut masuk repository, jadi tanpa langkah ini berkas yang dirujuk klien belum ada.',
+ code: `cd mcp
+pnpm install
+pnpm run build`,
+ lang: 'bash'
+ },
+ {
+ title: '2. Daftarkan di klien MCP',
+ desc: 'Tempel blok berikut ke berkas konfigurasi klien. Claude Desktop memakai claude_desktop_config.json; Cursor dan VS Code memakai berkas mcp.json. Sesuaikan args ke lokasi checkout proyek ini, dan ganti wa_live_GANTI_DENGAN_KUNCI_ANDA dengan kunci pribadi Anda.',
+ code: `{
+"mcpServers": {
+"wa-api": {
+"command": "node",
+"args": ["/path/ke/wa-api/mcp/dist/index.js"],
+"env": {
+"WA_API_KEY": "wa_live_GANTI_DENGAN_KUNCI_ANDA",
+"WA_API_BASE_URL": "${API_ORIGIN}",
+"WA_MCP_ACTOR": "hermes-nama-anda"
+}
+}
+}
+}`,
+ lang: 'json',
+ notes: [
+ 'Satu proses per pengguna, dengan kunci masing-masing. Jangan memakai kunci akun lain.',
+ 'Jika klien MCP berjalan di komputer lain, isi WA_API_BASE_URL dengan alamat wa-api yang dapat dijangkau dari komputer itu — nilai di blok di atas mengikuti alamat panel yang sedang Anda buka.',
+ 'Setelah berkas disimpan, klien MCP harus dijalankan ulang agar entri baru terbaca.',
+ ]
+ },
+ {
+ title: '3. Pastikan agen benar-benar terhubung',
+ desc: 'Minta agen memanggil tool baca paling ringan. Kalau daftar sesi Anda muncul, konfigurasi sudah benar.',
+ code: `Minta agen: "panggil wa_list_sessions"
+
+Keluaran yang diharapkan: daftar sesi WhatsApp milik akun Anda,
+lengkap dengan status koneksi dan jumlah antrean per sesi.`,
+ lang: 'text',
+ callout: {
+ type: 'tip',
+ text: 'Setiap panggilan agen yang membawa WA_MCP_ACTOR tercatat di menu API Logs, pada kolom Agen dan Perubahan. Di situlah Anda memeriksa apa yang sebenarnya dilakukan agen, termasuk aksi yang gagal.'
+ }
+ },
+ {
+ title: 'Tool yang tersedia',
+ items: [
+ { label: 'Baca (7)', value: 'wa_list_sessions, wa_get_session, wa_audit_antiban, wa_get_queue, wa_get_metrics, wa_list_messages, wa_audit_decisions', desc: 'Tidak mengubah apa pun.' },
+ { label: 'Tulis (5)', value: 'wa_set_antiban_preset, wa_pause_queue, wa_resume_queue, wa_reconnect_session, wa_reset_cooldown', desc: 'Semuanya bisa dibalik. Setiap aksi tercatat sebagai baris audit yang tidak dapat dihapus pengguna biasa.' },
+ { label: 'Sengaja tidak ada', value: 'kirim pesan/blast, hapus sesi, logout, kelola user, queue/clear', desc: 'Kirim pesan dan queue/clear tidak dapat dibatalkan, dan keduanya terdengar seperti perintah rutin bagi agen. Karena itu tidak didaftarkan sama sekali, bukan hanya dibatasi.' },
+ ]
+ },
+ {
+ title: 'Batas yang perlu diketahui',
+ callout: {
+ type: 'warning',
+ text: 'WA_MCP_ACTOR hanya label, bukan autentikasi. Siapa pun yang memegang kunci dapat mengisi nama agen apa saja, sehingga kolom Agen membuktikan bahwa panggilan datang dari agen, tetapi tidak membuktikan agen mana. Pelaku sebenarnya tetap diambil server dari kunci yang terverifikasi.'
+ },
+ notes: [
+ 'Membatasi tool per agen belum tersedia: batas akses agen selalu sama dengan batas akses pemilik kunci.',
+ 'Kunci yang bocor berarti seluruh hak akun Anda ikut bocor. Rotasi lewat menu Users & API Keys; kunci lama langsung berhenti bekerja dan setiap klien MCP yang memakainya akan gagal sampai diperbarui.',
+ ]
+ },
  ]
  },
 

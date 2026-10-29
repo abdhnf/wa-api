@@ -27,8 +27,8 @@ kunci yang diverifikasi, jadi yang bisa dipalsukan hanya nama agennya.
 
 ```bash
 cd mcp
-npm install
-npm run build
+pnpm install
+pnpm run build
 ```
 
 ## Daftarkan di klien MCP
@@ -51,6 +51,16 @@ npm run build
 
 Satu proses per pengguna, dengan kunci masing-masing. Tidak ada kunci bersama
 yang disimpan MCP.
+
+Paket ini **tidak diterbitkan ke npm** dan memang tidak dimaksudkan untuk itu:
+ia dijalankan dari checkout proyek ini, dengan `node` menunjuk ke
+`mcp/dist/index.js`. Karena itu `dist/` wajib dibangun lebih dulu di mesin yang
+menjalankan klien MCP.
+
+`WA_API_BASE_URL` harus diarahkan ke wa-api yang dipakai. Bawaannya
+`http://127.0.0.1:3100`, yang hanya benar kalau MCP dan wa-api berada di mesin
+yang sama — kalau klien MCP berjalan di komputer lain, isi dengan alamat wa-api
+yang dapat dijangkau dari sana.
 
 ## Tool
 

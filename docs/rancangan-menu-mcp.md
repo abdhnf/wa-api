@@ -1,6 +1,8 @@
 # Rancangan: Menu MCP pada panel wa-api
 
-Status: **rancangan, belum diimplementasikan.**
+Status: **sebagian selesai, bentuk akhirnya berubah.** Rancangan ini ditulis
+sebelum langkah 1 dikerjakan; setelah langkah 1 selesai, keputusan "satu tab MCP"
+pada bagian 2 dibatalkan — lihat bagian 7.
 Prasyarat yang sudah selesai: isolasi tenant (`972ed10`), kolom audit + filter GET
 selektif (`f32f814`), tiga celah bukti audit (`8d8ce74`), server MCP 12 tool
 (`b75c9fd`).
@@ -279,10 +281,25 @@ kedua yang menampilkan tabel yang sama mahal.
    (`6ab53d0`).** Formatter dipisah ke `panel/src/lib/perubahanAudit.ts` agar
    bisa diuji; 25 asersi + pembanding mutasi, dan uji e2e 15 asersi yang
    membuktikan server benar-benar mengirim kolomnya.
-2. `GET /api/v1/mcp/activity` + `GET /api/v1/mcp/usage` + uji isolasi tenant
-   untuk keduanya (non-admin tidak boleh melihat aktivitas pengguna lain).
-3. `McpPage.tsx` lapis A.
-4. Lapis B dan C.
+2. ~~Lapis C — panduan pemasangan.~~ **Selesai, tetapi di tab Docs, bukan tab
+   MCP** (section `04. MCP untuk Agen AI`). Distribusinya tetap dari checkout
+   proyek ini — server MCP tidak diterbitkan ke npm — sehingga panduan memuat
+   langkah build dan menunjuk `mcp/dist/index.js`.
+3. Lapis B — kartu pemakaian kunci. **Rumahnya tab Users & API Keys**, bukan
+   halaman baru; masih butuh `GET /api/v1/mcp/usage`.
+4. Lapis A — **tidak dikerjakan sebagai halaman.** Tabelnya sudah ada di API
+   Logs; yang belum ada hanya filter "hanya agen" di `ApiLogsPage.tsx`.
+5. `GET /api/v1/mcp/activity` hanya diperlukan bila filter agen tidak cukup
+   dikerjakan di endpoint `api-logs` yang sudah ada.
+
+### Mengapa bentuknya berubah
+
+Lapis A sudah punya rumah setelah langkah 1. Membuat tab MCP berarti menampilkan
+tabel yang sama di dua tempat, dengan dua salinan aturan tampilan — termasuk
+pembedaan "nilai lama tidak dicatat" vs "tidak ada perubahan" yang sudah diuji di
+`perubahanAudit.ts`. Lapis C tidak butuh backend sama sekali, dan lapis B
+menempel pada tempat kunci memang dikelola. Satu tab baru tidak menambah
+kemampuan apa pun yang belum bisa dijangkau.
 
 Langkah 1 sengaja lebih dulu: kalau setelah itu ternyata halaman terpisah tidak
 dibutuhkan, langkah 3–4 bisa dipersempit tanpa membuang pekerjaan.
