@@ -10,8 +10,10 @@ import { config } from '../config.js';
 import { SessionManager } from '../session-manager.js';
 import { BaileysEngine } from '../engine/BaileysEngine.js';
 import { rateLimitHook, getClientIp } from '../security.js';
-import { insertApiLog } from '../db.js';
+import { insertApiLog, setStatusChangeListener, getSessionOwnerId } from '../db.js';
 import { saringParams } from '../audit-params.js';
+import { prosesPesanMasuk, setPengirimBalasan, setPenyelesaiLid } from '../inbound-pipeline.js';
+import { pancarkanEvent } from '../webhook.js';
 
 /**
  * Tentukan sasaran sebuah permintaan dari parameter rutenya.
@@ -196,6 +198,88 @@ engine.onBlocklistCallback = (sessionId, blockedCount) => manager.metrics.setBlo
 engine.onDisconnectCallback = (sessionId) => manager.onDisconnect(sessionId);
 engine.onReconnectCallback = (sessionId) => manager.onReconnect(sessionId);
 engine.onIncomingCallback = (sessionId, jid) => manager.onIncoming(sessionId, jid);
+// Pesan masuk utuh: disimpan ke inbox lebih dulu, lalu diteruskan ke chatbot
+// dan webhook. Didaftarkan di sini (bukan di engine) supaya urutan pemrosesan
+// dipegang satu tempat — lihat `inbound-pipeline.ts`.
+engine.onInboundMessageCallback = (sessionId, msg, upsertType) => {
+  // Pelajari pasangan LID<->nomor dari key pesan SEBELUM normalisasi.
+  //
+  // `learnLidFromMessageKey()` sudah ada di session-manager tetapi tidak pernah
+  // dipanggil, sehingga resolver hanya terisi dari metadata grup — dan pesan
+  // dari nomor yang belum pernah terlihat di grup mana pun tidak bisa
+  // diselesaikan. Di sini justru sumbernya paling sering: setiap pesan masuk
+  // membawa `remoteJid` dan/atau `remoteJidAlt`.
+  try {
+    manager.learnLidFromMessageKey(msg?.key);
+  } catch {}
+
+  prosesPesanMasuk(sessionId, msg, upsertType);
+};
+
+// Penyelesai LID untuk jalur inbox: tanya resolver yang sama dengan pengiriman,
+// supaya percakapan dari satu orang tidak terpecah jadi dua kontak.
+setPenyelesaiLid((jid) => manager.getLidResolver().getPn(jid));
+
+// Perubahan status koneksi sesi -> event webhook `session.status`.
+//
+// `session.status` sebelumnya terdaftar sebagai event yang bisa dilanggan
+// tetapi tidak pernah dipancarkan. Pemilik sesi hanya tahu koneksinya putus
+// dengan membuka panel; penerima webhook tidak diberi tahu sama sekali.
+//
+// Status TERAKHIR per sesi disimpan dan hanya dipancarkan bila berbeda, dengan
+// jeda minimum. Sesinya sendiri bisa naik-turun beberapa detik sekali saat
+// jaringan buruk, dan tanpa penjagaan ini setiap fluktuasi menjadi satu baris
+// antrean — penerima dibanjiri ribuan event "disconnected/connected" yang
+// tidak memberi informasi apa pun. Yang berguna bagi penerima adalah perubahan
+// yang bertahan, bukan kedipan.
+const statusTerakhir = new Map<string, { status: string; pada: number }>();
+const JEDA_MINIMUM_STATUS_MS = 30_000;
+
+engine.onSessionStatusCallback = (sessionId, status, reason) => {
+  const owner = getSessionOwnerId(sessionId);
+  if (!owner) return;
+
+  const sebelum = statusTerakhir.get(sessionId);
+  const sekarang = Date.now();
+  if (sebelum) {
+    if (sebelum.status === status) return;
+    if (sekarang - sebelum.pada < JEDA_MINIMUM_STATUS_MS) return;
+  }
+  statusTerakhir.set(sessionId, { status, pada: sekarang });
+
+  pancarkanEvent(
+    'session.status',
+    owner,
+    { sessionId, status, reason: reason ?? null, occurredAt: new Date(sekarang).toISOString() },
+    { sessionId },
+  );
+};
+
+// Balasan chatbot dikirim lewat antrean yang sama dengan pesan lain, dengan
+// prioritas tinggi. Dengan begitu balasan bot tetap tercatat di `messages`,
+// tetap kena pacing anti-ban, dan tetap terlihat di panel.
+setPengirimBalasan(async ({ sessionId, to, text, priority }) => {
+  const owner = getSessionOwnerId(sessionId);
+  return manager.enqueue({ sessionId, userId: owner, mode: 'text', to, text, priority });
+});
+
+// Perubahan status pesan -> event webhook `message.status`.
+//
+// Didaftarkan di sini, bukan dipanggil langsung dari `db/pesan.ts`, untuk
+// memutus siklus impor db <-> webhook. Listener hanya dipanggil saat status
+// benar-benar berubah, jadi `pacing` yang berulang tidak membanjiri penerima.
+setStatusChangeListener((info) => {
+  pancarkanEvent('message.status', info.userId, {
+    messageId: info.messageId,
+    sessionId: info.sessionId,
+    waMessageId: info.waMessageId,
+    batchId: info.batchId,
+    to: info.recipient,
+    status: info.status,
+    previousStatus: info.previousStatus,
+    occurredAt: new Date(info.occurredAt).toISOString(),
+  }, { sessionId: info.sessionId });
+});
 await engine.restoreSavedSessions();
 app.addContentTypeParser(/^(image|video|audio)\//, { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
 for (const rawType of ['application/octet-stream', 'application/pdf']) {

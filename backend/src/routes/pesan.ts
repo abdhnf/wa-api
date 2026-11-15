@@ -10,9 +10,10 @@ import { mkdir, writeFile, unlink, stat, readFile } from 'node:fs/promises';
 import { join, resolve, extname } from 'node:path';
 import { requireApiKey, requireAuth } from '../auth.js';
 import { generateApiKey } from '../security.js';
-import { upsertWebhook, listWebhooks, getMessageById, db, checkAndIncrementWeeklyQuota, checkAndIncrementQuota, refundQuota } from '../db.js';
-import { sendTextSchema, sendMediaSchema, sendLocationSchema, sendBulkSchema, webhookSchema, parseBody } from './schemas.js';
+import { getMessageById, db, checkAndIncrementWeeklyQuota, checkAndIncrementQuota, refundQuota } from '../db.js';
+import { sendTextSchema, sendMediaSchema, sendLocationSchema, sendBulkSchema, parseBody } from './schemas.js';
 import { manager } from './konteks.js';
+import { tandaiTakeoverOperator } from '../chatbot.js';
 import { MEDIA_DIR, MEDIA_TTL_MS, MEDIA_ID_PATTERN, resolveMediaMime, resolveMediaExtension, mediaAbsoluteUrl } from './media.js';
 import type { FastifyInstance } from 'fastify';
 
@@ -36,6 +37,10 @@ export function daftarkanRutePesan(app: FastifyInstance): void {
       return reply.code(400).send({ error: err.message || 'Gagal memproses sesi WhatsApp' });
     }
     const msg = await manager.enqueue({ sessionId: resolved.sessionId, userId: user.id, mode: 'text', to: data.to, text: data.text, priority: data.priority, batchId: data.batchId });
+    // Operator membalas manual -> bot berhenti untuk kontak ini selama 24 jam.
+    // Tanpa ini, bot dan operator akan membalas hal yang sama bergantian.
+    // Hanya untuk pesan non-batch: kampanye blast bukan percakapan.
+    if (!data.batchId) tandaiTakeoverOperator(resolved.sessionId, data.to);
     return reply.code(202).send({ success: true, messageId: msg.id, type: 'text', status: msg.status, jitterDelayMs: msg.jitterDelayMs });
   });
 
@@ -221,26 +226,9 @@ export function daftarkanRutePesan(app: FastifyInstance): void {
   });
 
   // ============ Webhooks ============
-  app.post('/api/v1/webhooks', { preHandler: requireApiKey }, async (req, reply) => {
-    const parsed = parseBody(webhookSchema, req.body);
-    if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
-    const { data } = parsed;
-
-    const hook = {
-      id: `whk_${crypto.randomUUID().slice(0, 8)}`,
-      userId: req.apiKeyUser!.id,
-      url: data.url,
-      events: data.events,
-      secret: data.secret || generateApiKey('whsec').replace('wa_live_sec_', ''),
-      status: 'active' as const,
-    };
-    upsertWebhook(hook);
-    return reply.code(201).send({ success: true, webhookId: hook.id, status: hook.status });
-  });
-
-  app.get('/api/v1/webhooks', { preHandler: requireApiKey }, async (req) => {
-    return { webhooks: listWebhooks(req.apiKeyUser!.id) };
-  });
+  // Pendaftaran, pengujian, dan riwayat pengiriman webhook pindah ke
+  // `routes/webhook.ts`. Rute lama di sini hanya menyimpan konfigurasi dan
+  // tidak pernah mengirim apa pun ke URL terdaftar.
 
   app.post('/api/v1/media/upload', { preHandler: requireAuth }, async (req, reply) => {
     try {

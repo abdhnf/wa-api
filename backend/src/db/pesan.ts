@@ -1,4 +1,4 @@
-import type { OutboundMessage, SessionInfo, UserRecord, WebhookRecord } from '../types.js';
+import type { OutboundMessage, SessionInfo, UserRecord } from '../types.js';
 import { db } from './client.js';
 import { listSessions } from './sessions.js';
 import { getUserById } from './users.js';
@@ -44,6 +44,38 @@ const STATUS_RANK: Record<string, number> = {
 const FORCED_STATUSES = new Set(['failed', 'invalid_number', 'not_registered', 'cancelled']);
 
 /**
+ * Pendengar perubahan status pesan.
+ *
+ * Dipasang dari luar (lihat `routes/konteks.ts`) alih-alih memanggil
+ * `pancarkanEvent()` langsung dari sini. Alasannya siklus impor: `db.ts`
+ * mengekspor modul ini, sementara `webhook.ts` mengimpor `db.ts`. Memanggil
+ * balik lewat satu fungsi yang didaftarkan memutus siklus itu tanpa
+ * mengubah pemanggil `updateMessageStatus()` yang jumlahnya banyak.
+ *
+ * Dipanggil HANYA saat status benar-benar berubah — bukan setiap kali fungsi
+ * ini dipanggil. `pacing` dipanggil berkali-kali untuk satu pesan, dan
+ * memancarkan event untuk setiap panggilan akan membanjiri penerima webhook
+ * dengan kabar yang isinya sama.
+ */
+type StatusChangeListener = (info: {
+  messageId: string;
+  sessionId: string;
+  userId: string;
+  status: string;
+  previousStatus: string;
+  waMessageId?: string | null;
+  batchId?: string | null;
+  recipient: string;
+  occurredAt: number;
+}) => void;
+
+let statusChangeListener: StatusChangeListener | null = null;
+
+export function setStatusChangeListener(fn: StatusChangeListener | null): void {
+  statusChangeListener = fn;
+}
+
+/**
  * Normalisasi waktu kejadian dari WhatsApp menjadi epoch MILIDETIK.
  *
  * WhatsApp mengirim timestamp dalam DETIK (`attrs.t`), sedangkan yang disimpan
@@ -64,6 +96,42 @@ function normalisasiWaktu(mentah: unknown): number | undefined {
   return ms >= AMBANG_WAKTU_MS ? Math.round(ms) : undefined;
 }
 
+/**
+ * Beri tahu pendengar bahwa status pesan berubah.
+ *
+ * Hanya dipanggil bila statusnya BERBEDA dari sebelumnya. Tanpa syarat ini,
+ * `pacing` yang dipanggil berulang untuk satu pesan akan memancarkan event
+ * berkali-kali dengan isi yang sama.
+ *
+ * Tidak pernah melempar: pencatatan status adalah jalur kritis pengiriman, dan
+ * kegagalan notifikasi tidak boleh menggagalkannya.
+ */
+function beritahuPerubahanStatus(
+  row: any,
+  id: string,
+  sebelumnya: string,
+  sekarang: string,
+  waktuKejadian?: number,
+): void {
+  if (!statusChangeListener) return;
+  if (sebelumnya === sekarang) return;
+  try {
+    statusChangeListener({
+      messageId: id,
+      sessionId: row.session_id,
+      userId: row.user_id,
+      status: sekarang,
+      previousStatus: sebelumnya,
+      waMessageId: row.wa_message_id ?? null,
+      batchId: row.batch_id ?? null,
+      recipient: row.recipient,
+      occurredAt: normalisasiWaktu(waktuKejadian) ?? Date.now(),
+    });
+  } catch (err) {
+    console.warn('[db] Pendengar perubahan status gagal:', err);
+  }
+}
+
 export function updateMessageStatus(
   id: string,
   status: OutboundMessage['status'],
@@ -76,7 +144,7 @@ export function updateMessageStatus(
    */
   waktuKejadian?: number,
 ): void {
-  const row = db.prepare('SELECT status, payload, jitter_delay_ms FROM messages WHERE id = ?').get(id) as any;
+  const row = db.prepare('SELECT status, payload, jitter_delay_ms, session_id, user_id, wa_message_id, batch_id, recipient FROM messages WHERE id = ?').get(id) as any;
   if (row) {
     // Tolak kemunduran status. 'failed' dan status terminal lain selalu lolos
     // supaya kegagalan tetap tercatat walau pesan sudah pernah 'read'.
@@ -90,6 +158,7 @@ export function updateMessageStatus(
     ) {
       return;
     }
+    const statusSebelumnya: string = row.status;
     try {
       const obj = JSON.parse(row.payload);
       obj.status = status;
@@ -115,6 +184,7 @@ export function updateMessageStatus(
       } else {
         db.prepare('UPDATE messages SET status = ?, payload = ? WHERE id = ?').run(status, JSON.stringify(obj), id);
       }
+      beritahuPerubahanStatus(row, id, statusSebelumnya, status, waktuKejadian);
       return;
     } catch {}
   }
@@ -315,25 +385,11 @@ export function getUserLogs(userId: string): { user: UserRecord | null; sessions
 }
 
 // ---------- Webhooks ----------
-export function upsertWebhook(w: WebhookRecord): void {
-  db.prepare(
-    `INSERT INTO webhooks (id, user_id, url, events, secret, status)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET url=excluded.url, events=excluded.events, status=excluded.status`
-  ).run(w.id, w.userId, w.url, JSON.stringify(w.events), w.secret, w.status);
-}
+// Konfigurasi & antrean pengiriman webhook pindah ke `db/webhooks.ts`.
+// Fungsi lama di sini hanya menyimpan konfigurasi dan tidak pernah mengirim
+// apa pun; pemisahan itu yang membuat pengiriman bisa ditambahkan tanpa
+// mengubah pemanggil lama. Lihat `db/webhooks.ts`.
 
-export function listWebhooks(userId: string): WebhookRecord[] {
-  const rows = db.prepare('SELECT * FROM webhooks WHERE user_id = ?').all(userId) as any[];
-  return rows.map((r) => ({
-    id: r.id,
-    userId: r.user_id,
-    url: r.url,
-    events: JSON.parse(r.events),
-    secret: r.secret,
-    status: r.status,
-  }));
-}
 export function getAntiBanState(sessionId: string): string | null {
   const row = db.prepare('SELECT antiban_state FROM sessions WHERE id = ?').get(sessionId) as any;
   return row?.antiban_state ?? null;

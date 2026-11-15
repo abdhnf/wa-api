@@ -260,7 +260,190 @@ CREATE INDEX IF NOT EXISTS idx_antiban_dec_message      ON antiban_decisions (me
 CREATE INDEX IF NOT EXISTS idx_antiban_dec_batch        ON antiban_decisions (batch_id) WHERE batch_id IS NOT NULL;
 `);
 
-// Sinkronisasi data kuota existing
+// Pesan MASUK dari WhatsApp.
+//
+// Sebelum tabel ini ada, `messages.upsert` hanya dipakai untuk mencatat metrik
+// anti-ban (`onIncomingCallback`), lalu isi pesannya dibuang. Akibatnya gateway
+// bisa mengirim tapi tidak bisa menerima: tidak ada inbox, tidak ada bahan untuk
+// chatbot, dan tidak ada yang bisa dipancarkan sebagai event webhook.
+//
+// `user_id` diambil dari `sessions.user_id` saat pesan disimpan, BUKAN dari
+// pesan itu sendiri. Pengirim tidak boleh menentukan tenant mana yang memiliki
+// pesannya.
+//
+// `wa_message_id` unik per sesi: Baileys bisa mengirim ulang pesan yang sama
+// setelah reconnect, dan tanpa penjagaan ini inbox akan berisi duplikat.
+db.exec(`
+CREATE TABLE IF NOT EXISTS inbound_messages (
+  id            TEXT PRIMARY KEY,
+  session_id    TEXT NOT NULL,
+  user_id       TEXT NOT NULL,
+  wa_message_id TEXT,
+  from_jid      TEXT NOT NULL,
+  from_phone    TEXT,
+  push_name     TEXT,
+  chat_type     TEXT NOT NULL DEFAULT 'private',
+  type          TEXT NOT NULL,
+  text          TEXT,
+  media_mime    TEXT,
+  media_caption TEXT,
+  raw           TEXT,
+  received_at   TEXT NOT NULL,
+  bot_handled   INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_inbound_wa_id
+  ON inbound_messages (session_id, wa_message_id) WHERE wa_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_inbound_user_time
+  ON inbound_messages (user_id, received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inbound_session_phone
+  ON inbound_messages (session_id, from_phone, received_at DESC);
+`);
+
+// Antrean pengiriman webhook.
+//
+// Tabel `webhooks` hanya menyimpan KONFIGURASI; sebelum tabel ini ada, tidak ada
+// satu pun baris kode yang mengirim HTTP ke URL terdaftar. Dokumentasi panel
+// sudah menjanjikan event `message.received` padahal event itu tidak pernah
+// terjadi.
+//
+// Pengiriman lewat tabel, bukan langsung dari jalur permintaan: penerima yang
+// mati atau lambat tidak boleh menahan pemrosesan pesan WhatsApp. Worker membaca
+// baris `pending` dan mencoba ulang dengan backoff.
+//
+// `next_attempt_at` epoch milidetik supaya perbandingan waktu tidak bergantung
+// pada zona waktu SQLite.
+db.exec(`
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id               TEXT PRIMARY KEY,
+  webhook_id       TEXT NOT NULL,
+  user_id          TEXT NOT NULL,
+  event            TEXT NOT NULL,
+  payload          TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'pending',
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at  INTEGER NOT NULL,
+  last_status_code INTEGER,
+  last_error       TEXT,
+  delivery_id      TEXT NOT NULL,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  delivered_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wh_del_pending
+  ON webhook_deliveries (status, next_attempt_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_wh_del_webhook_time
+  ON webhook_deliveries (webhook_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_wh_del_user_time
+  ON webhook_deliveries (user_id, created_at DESC);
+`);
+
+// Kunci idempotensi per pengiriman.
+//
+// `delivery_id` sudah stabil antar percobaan ulang, tetapi ia dibuat acak per
+// pemancaran: dua pemancaran untuk kejadian yang SAMA (pesan yang sama dikirim
+// ulang Baileys setelah reconnect, atau status yang berubah bolak-balik) akan
+// menghasilkan dua nilai berbeda. Penerima yang melakukan dedupe berdasarkan
+// nilai itu tidak bisa mengenali keduanya sebagai satu kejadian.
+//
+// Kuncinya dihitung sekali saat masuk antrean lalu DISIMPAN, bukan dihitung
+// ulang saat kirim: percobaan ulang harus memakai kunci yang sama persis dengan
+// percobaan pertama, dan payload yang disimpan tidak berubah.
+ensureColumn('webhook_deliveries', 'idempotency_key', 'TEXT');
+
+// Kolom tambahan pada `webhooks` untuk status kesehatan tiap endpoint.
+//
+// `last_success_at` dan `failure_count` dipakai panel untuk menandai endpoint
+// yang sudah lama tidak pernah menerima kiriman — kondisi yang sebelumnya tidak
+// terlihat sama sekali, karena tidak ada riwayat pengiriman yang disimpan.
+// `created_at` sengaja tanpa DEFAULT ekspresi: SQLite menolak
+// `ALTER TABLE ... ADD COLUMN` dengan default non-konstan, dan tabel `webhooks`
+// sudah ada di instalasi lama. Nilainya diisi di bawah untuk baris lama.
+ensureColumn('webhooks', 'created_at', 'TEXT');
+ensureColumn('webhooks', 'last_success_at', 'TEXT');
+ensureColumn('webhooks', 'failure_count', 'INTEGER NOT NULL DEFAULT 0');
+// Cakupan webhook: sesi mana dan jenis chat apa.
+//
+// Sebelumnya satu webhook menerima SEMUA pesan dari SEMUA sesi milik akun.
+// Untuk operasi dengan beberapa nomor itu berarti dashboard untuk nomor A ikut
+// menerima pesan nomor B, tanpa cara memisahkannya selain memakai akun lain.
+// `session_id` NULL = semua sesi (perilaku lama, tetap sah).
+//
+// `chat_types` berisi daftar JSON dari `private`/`group`/`broadcast`. Tanpa
+// kolom ini pesan grup ikut terkirim ke penerima yang tidak menanganinya.
+ensureColumn('webhooks', 'session_id', 'TEXT');
+ensureColumn('webhooks', 'chat_types', 'TEXT');
+// Filter isi pesan: hanya pesan yang cocok yang diteruskan.
+//
+// `session_id` dan `chat_types` menjawab "dari nomor mana", bukan "pesan apa".
+// Tanpa kolom ini, webhook ke dashboard tiket tetap menerima setiap sapaan,
+// setiap balasan "terima kasih", dan setiap pesan grup — penerima harus
+// menyaring sendiri, dan penyaringan di sana berjalan setelah kuota jaringan
+// terpakai.
+//
+// `match_type` NULL berarti tanpa filter (perilaku lama, tetap sah). Nilainya
+// memakai arti yang sama persis dengan aturan chatbot (`exact`, `contains`,
+// `keyword`, `regex`) supaya aturan yang sudah terbukti di chatbot bisa
+// disalin apa adanya ke sini.
+ensureColumn('webhooks', 'match_type', 'TEXT');
+ensureColumn('webhooks', 'match_value', 'TEXT');
+try {
+  db.exec("UPDATE webhooks SET created_at = datetime('now') WHERE created_at IS NULL");
+  db.exec("UPDATE webhooks SET chat_types = '[\"private\"]' WHERE chat_types IS NULL");
+} catch {}
+
+// Chatbot rule-based.
+//
+// `chatbot_flows` menyimpan ATURAN, `chatbot_sessions` menyimpan POSISI
+// percakapan. Dipisah karena satu aturan dipakai banyak kontak sekaligus,
+// sementara posisi tiap kontak berbeda dan harus bertahan melewati restart.
+//
+// `session_id` pada flow boleh NULL, artinya berlaku untuk semua sesi milik
+// user. Ini yang paling sering dipakai: operator biasanya ingin satu menu
+// berlaku di semua nomor, bukan menduplikasinya per sesi.
+db.exec(`
+CREATE TABLE IF NOT EXISTS chatbot_flows (
+  id               TEXT PRIMARY KEY,
+  user_id          TEXT NOT NULL,
+  session_id       TEXT,
+  name             TEXT NOT NULL,
+  enabled          INTEGER NOT NULL DEFAULT 1,
+  priority         INTEGER NOT NULL DEFAULT 100,
+  match_type       TEXT NOT NULL DEFAULT 'contains',
+  match_value      TEXT NOT NULL,
+  reply_text       TEXT,
+  reply_media_url  TEXT,
+  steps            TEXT,
+  cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_chatbot_flows_user
+  ON chatbot_flows (user_id, enabled, priority);
+
+CREATE TABLE IF NOT EXISTS chatbot_sessions (
+  session_id       TEXT NOT NULL,
+  contact_phone    TEXT NOT NULL,
+  current_flow_id  TEXT,
+  current_step     TEXT,
+  context          TEXT,
+  bot_paused_until INTEGER,
+  last_activity_at TEXT NOT NULL,
+  PRIMARY KEY (session_id, contact_phone)
+);
+CREATE INDEX IF NOT EXISTS idx_chatbot_sessions_flow
+  ON chatbot_sessions (current_flow_id) WHERE current_flow_id IS NOT NULL;
+
+-- Kontak yang meminta berhenti. Tabel terpisah, bukan kolom di
+-- chatbot_sessions, karena opt-out harus tetap berlaku walau state
+-- percakapannya dibersihkan — dan karena blast perlu bisa memeriksanya
+-- tanpa menyentuh state chatbot.
+CREATE TABLE IF NOT EXISTS chatbot_optouts (
+  session_id    TEXT NOT NULL,
+  contact_phone TEXT NOT NULL,
+  reason        TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (session_id, contact_phone)
+);
+`);
+
 try {
   db.exec(`UPDATE users SET quota_limit = quota_per_week WHERE quota_limit IS NULL OR quota_limit = 100`);
   db.exec(`UPDATE users SET used_in_period = used_this_week WHERE used_in_period IS NULL`);

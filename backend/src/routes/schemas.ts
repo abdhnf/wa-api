@@ -121,7 +121,65 @@ export const registerSchema = z.object({
 export const webhookSchema = z.object({
   url: z.string().url(),
   events: z.array(z.string()).min(1),
-  secret: z.string().min(8).optional(),
+  // Minimal 16 karakter. Secret yang terlalu pendek bisa ditebak dengan
+  // brute-force, dan karena HMAC-nya atas isi yang diketahui penyerang, tebakan
+  // yang benar langsung menghasilkan tanda tangan yang sah.
+  secret: z.string().min(16).max(255).optional(),
+  // Cakupan: sesi mana yang dikirim. Kosong/null = semua sesi.
+  sessionId: z.string().optional().nullable(),
+  // Jenis chat yang dikirim. Kosong = server memakai `['private']` (perilaku
+  // yang paling jarang mengejutkan: penerima inbox hampir selalu hanya
+  // menangani chat pribadi).
+  chatTypes: z.array(z.enum(['private', 'group', 'broadcast'])).optional().nullable(),
+  // Filter isi pesan. Kosong/null = semua pesan diteruskan.
+  //
+  // Arti `matchType` sengaja sama dengan aturan chatbot, bukan istilah baru:
+  // operator yang sudah punya aturan terbukti bisa memindahkannya ke sini tanpa
+  // menerjemahkan apa pun.
+  matchType: z.enum(['exact', 'contains', 'keyword', 'regex']).optional().nullable(),
+  matchValue: z.string().min(1).max(500).optional().nullable(),
+}).refine(
+  (d) => {
+    // Setengah filter lebih berbahaya daripada tidak ada filter: `matchType`
+    // tanpa nilai akan diam-diam meneruskan semua pesan, dan operator akan
+    // mengira integrasinya sudah tersaring.
+    const adaTipe = d.matchType !== undefined && d.matchType !== null;
+    const adaNilai = d.matchValue !== undefined && d.matchValue !== null;
+    return adaTipe === adaNilai;
+  },
+  { message: 'matchType dan matchValue harus diisi bersama, atau dikosongkan keduanya' },
+);
+
+// ---------- Chatbot ----------
+
+const chatbotStepSchema = z.object({
+  id: z.string().min(1),
+  reply: z.string().min(1),
+  next: z.record(z.string()).optional(),
+  end: z.boolean().optional(),
+});
+
+export const chatbotFlowSchema = z.object({
+  name: z.string().min(1).max(120),
+  // NULL/kosong = berlaku untuk semua sesi milik user.
+  sessionId: z.string().optional().nullable(),
+  enabled: z.boolean().optional(),
+  priority: z.coerce.number().int().min(0).max(10000).optional(),
+  matchType: z.enum(['exact', 'contains', 'regex', 'keyword']),
+  matchValue: z.string().min(1).max(500),
+  replyText: z.string().max(4000).optional().nullable(),
+  replyMediaUrl: z.string().url().optional().nullable(),
+  steps: z.array(chatbotStepSchema).optional().nullable(),
+  cooldownSeconds: z.coerce.number().int().min(0).max(86400).optional(),
+}).refine((d) => Boolean(d.replyText) || Boolean(d.steps && d.steps.length > 0), {
+  message: 'Butuh replyText atau steps',
+});
+
+export const chatbotTestSchema = z.object({
+  sessionId: z.string().min(1),
+  text: z.string().min(1).max(4000),
+  currentFlowId: z.string().optional().nullable(),
+  currentStep: z.string().optional().nullable(),
 });
 
 export const createUserSchema = z.object({

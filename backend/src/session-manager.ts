@@ -1330,10 +1330,41 @@ export class SessionManager {
 
         // 6. Rate Limiter & Delay Pacing
         if (isHighPriority) {
-          // Jalur Prioritas Tinggi: Pacing minimal 1 detik agar natural di socket WA, bypass cooldown blast
-          msg.jitterDelayMs = 1000;
-          updateMessageStatus(msg.id, 'pacing', undefined, 1000);
-          await new Promise((r) => setTimeout(r, 1000));
+          // Jalur Prioritas Tinggi (balasan chatbot & balasan manual operator):
+          // pajak jeda dibuat sependek mungkin karena lawan bicaranya sedang
+          // menunggu, tetapi sinyal "sedang mengetik" tetap dikirim lebih dulu.
+          //
+          // Sebelumnya jalur ini hanya diam 1 detik lalu mengirim: dari sisi
+          // penerima balasan muncul tiba-tiba tanpa tanda apa pun, padahal
+          // justru inilah percakapan yang paling terasa sebagai manusia. Rencana
+          // presence-nya dipakai bersama jalur blast supaya durasinya ikut
+          // panjang pesan, tidak dipatok satu detik.
+          const rencana = ab.presence.computeTypingPlan(content.length);
+          const totalMengetik = rencana.reduce((n, s) => n + s.durationMs, 0);
+          // Dibatasi 8 detik: balasan chatbot yang "mengetik" lebih lama dari itu
+          // terbaca sebagai bot yang macet.
+          const batas = 8000;
+          const skala = totalMengetik > batas ? batas / totalMengetik : 1;
+
+          msg.jitterDelayMs = Math.round(totalMengetik * skala);
+          updateMessageStatus(msg.id, 'pacing', undefined, msg.jitterDelayMs);
+
+          if (typeof this.engine.sendPresence === 'function') {
+            try {
+              for (const step of rencana) {
+                const durasi = Math.round(step.durationMs * skala);
+                await this.engine.sendPresence(sessionId, jid, step.state);
+                if (durasi > 0) await new Promise((r) => setTimeout(r, durasi));
+              }
+            } catch {
+              // Presence bersifat kosmetik: kegagalannya tidak boleh menahan
+              // pengiriman, dan beberapa versi WhatsApp mengabaikannya diam-diam.
+            }
+          } else if (msg.jitterDelayMs > 0) {
+            // Engine tanpa dukungan presence tetap perlu jeda, kalau tidak
+            // pesan terkirim tanpa jeda sama sekali.
+            await new Promise((r) => setTimeout(r, msg.jitterDelayMs));
+          }
         } else {
           // Jalur Blast Normal: Cek delay & batasan
           const delayCheck = ab.rateLimiter.getDelayReason(msg.to, content);

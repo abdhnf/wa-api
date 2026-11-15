@@ -17,7 +17,10 @@
  * - db/reset-password.ts  token reset password
  * - db/kuota.ts           kuota harian/mingguan/bulanan
  * - db/sessions.ts        sesi WhatsApp
- * - db/pesan.ts           pesan keluar/masuk, antrean, webhook
+ * - db/pesan.ts           pesan keluar, antrean
+ * - db/inbox.ts           pesan MASUK dari WhatsApp
+ * - db/webhooks.ts        konfigurasi webhook & antrean pengirimannya
+ * - db/chatbot.ts          aturan chatbot, state percakapan, opt-out
  * - db/lid.ts             pemetaan LID <-> nomor telepon
  * - db/kesehatan.ts       skor risiko sesi
  * - db/jeda.ts            status jeda antrean
@@ -32,6 +35,9 @@ export * from './db/users.js';
 export * from './db/reset-password.js';
 export * from './db/sessions.js';
 export * from './db/pesan.js';
+export * from './db/inbox.js';
+export * from './db/webhooks.js';
+export * from './db/chatbot.js';
 export * from './db/kuota.js';
 export * from './db/lid.js';
 export * from './db/kesehatan.js';

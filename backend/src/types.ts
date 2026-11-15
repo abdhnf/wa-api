@@ -131,4 +131,16 @@ export interface WebhookRecord {
   events: string[];
   secret: string;
   status: 'active' | 'disabled';
+  /** Sesi yang dicakup. `null` = semua sesi milik akun. */
+  sessionId?: string | null;
+  /** Jenis chat yang dikirim. `null` = tidak dibatasi. */
+  chatTypes?: string[] | null;
+  /**
+   * Filter isi pesan. `null` = semua pesan diteruskan.
+   *
+   * Artinya sama persis dengan `matchType`/`matchValue` pada aturan chatbot,
+   * sehingga aturan yang sudah terbukti di sana bisa disalin apa adanya.
+   */
+  matchType?: 'exact' | 'contains' | 'keyword' | 'regex' | null;
+  matchValue?: string | null;
 }

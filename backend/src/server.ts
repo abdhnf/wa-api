@@ -14,14 +14,21 @@ import { daftarkanRuteAuth } from './routes/auth.js';
 import { daftarkanRuteUsers } from './routes/users.js';
 import { daftarkanRuteSessions } from './routes/sessions.js';
 import { daftarkanRutePesan } from './routes/pesan.js';
+import { daftarkanRuteInbox } from './routes/inbox.js';
+import { daftarkanRuteWebhook } from './routes/webhook.js';
+import { daftarkanRuteChatbot } from './routes/chatbot.js';
 import { daftarkanRutePengaturan } from './routes/pengaturan.js';
 import { daftarkanRuteOperasional } from './routes/operasional.js';
 import { jadwalkanRetensiApiLogs } from './retensi.js';
+import { mulaiWorkerWebhook } from './webhook.js';
 
 daftarkanRuteAuth(app);
 daftarkanRuteUsers(app);
 daftarkanRuteSessions(app);
 daftarkanRutePesan(app);
+daftarkanRuteInbox(app);
+daftarkanRuteWebhook(app);
+daftarkanRuteChatbot(app);
 daftarkanRutePengaturan(app);
 daftarkanRuteOperasional(app);
 
@@ -34,6 +41,9 @@ try {
   // pembersihannya harus dari sisi server. Dijadwalkan setelah listen supaya
   // kegagalannya tidak menghalangi server melayani permintaan.
   jadwalkanRetensiApiLogs();
+  // Worker webhook: mengirim antrean `webhook_deliveries` dengan retry.
+  // Dijalankan setelah listen supaya kegagalannya tidak menghalangi server.
+  mulaiWorkerWebhook();
 } catch (err) {
   app.log.error(err);
   process.exit(1);

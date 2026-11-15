@@ -309,6 +309,9 @@ export class BaileysEngine {
         s.info.metrics.disconnectCountToday = 0;
         upsertSession(s.info);
         this.onReconnectCallback?.(sessionId);
+        try {
+          this.onSessionStatusCallback?.(sessionId, 'connected');
+        } catch {}
         if (s.qrTimer) clearTimeout(s.qrTimer);
         s.qrResolve?.(''); // Resolve QR promise if still pending
 
@@ -400,6 +403,12 @@ export class BaileysEngine {
         try {
           this.onConnectionCloseCallback?.(sessionId, code, reason);
         } catch {}
+        try {
+          // `logged_out` sengaja dibedakan dari `disconnected`: yang pertama
+          // butuh scan ulang, yang kedua biasanya pulih sendiri. Penerima
+          // webhook perlu tahu bedanya untuk memutuskan apakah memicu alert.
+          this.onSessionStatusCallback?.(sessionId, reason === 'logged_out' ? 'logged_out' : 'disconnected', reason);
+        } catch {}
         if (reason !== 'logged_out') {
           this.onDisconnectCallback?.(sessionId);
         }
@@ -431,6 +440,16 @@ export class BaileysEngine {
           try {
             this.onMessageKeyCallback?.(sessionId, msg.key);
           } catch {}
+        }
+        // Pesan masuk utuh diteruskan ke lapisan aplikasi (inbox, chatbot,
+        // webhook). `m.type` ikut dikirim karena hanya `notify` yang berarti
+        // pesan baru — `append` adalah riwayat hasil sinkronisasi.
+        if (!msg.key?.fromMe) {
+          try {
+            this.onInboundMessageCallback?.(sessionId, msg, m?.type);
+          } catch (err) {
+            console.error(`[BaileysEngine] Gagal memproses pesan masuk ${sessionId}:`, err);
+          }
         }
       }
     });
@@ -855,9 +874,28 @@ export class BaileysEngine {
    * dipanggil untuk logged_out (agar tidak memicu reconnect).
    */
   onConnectionCloseCallback: ((sessionId: string, statusCode?: number, reason?: string) => void) | null = null;
+
+  /**
+   * Perubahan status koneksi sesi, untuk event webhook `session.status`.
+   *
+   * Tanpa callback ini `session.status` terdaftar dan bisa dilanggan di panel,
+   * tetapi tidak pernah dipancarkan — pelanggannya menunggu event yang tidak
+   * akan datang, dan tidak ada cara mengetahui itu dari panel.
+   */
+  onSessionStatusCallback: ((sessionId: string, status: string, reason?: string) => void) | null = null;
+
   onDisconnectCallback: ((sessionId: string) => void) | null = null;
   onReconnectCallback: ((sessionId: string) => void) | null = null;
   onIncomingCallback: ((sessionId: string, jid: string) => void) | null = null;
+
+  /**
+   * Pesan masuk utuh, untuk lapisan aplikasi (inbox, chatbot, webhook).
+   *
+   * Terpisah dari `onIncomingCallback` yang hanya membawa JID: callback itu
+   * dipakai metrik anti-ban dan sengaja tetap ringan, sementara di sini isi
+   * pesannya ikut diteruskan supaya bisa disimpan dan dijawab.
+   */
+  onInboundMessageCallback: ((sessionId: string, msg: any, upsertType?: string) => void) | null = null;
 
   /** Ambil daftar kontak yang mem-block nomor ini — sinyal reputasi paling langsung. */
   async fetchBlocklist(sessionId: string): Promise<string[] | null> {
