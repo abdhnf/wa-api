@@ -4,7 +4,7 @@ import {
  Sliders, BookOpen, Terminal, Copy, Check, Smartphone, MessageSquare,
  Users as UsersIcon, Webhook, Activity, ShieldCheck, Plus, FileText, Send, Eye, ScrollText,
  Cpu, HardDrive, Download, Settings, Layers, Sparkles, CheckCircle2, AlertTriangle, ExternalLink,
- Shield, Server, Network, ShieldAlert, KeyRound, Zap, RefreshCw, Lock as LockIcon
+ Shield, Server, Network, ShieldAlert, KeyRound, Zap, RefreshCw, Lock as LockIcon, Bot
 } from 'lucide-react';
 
 function getUserApiKey(): string {
@@ -47,6 +47,8 @@ interface Section {
  intro: string;
  endpoints?: EndpointDoc[];
  guideBlocks?: GuideBlock[];
+ /** Catatan penting yang tampil di bawah daftar endpoint. */
+ notes?: string[];
 }
 
 const sections: Section[] = [
@@ -914,30 +916,191 @@ lengkap dengan status koneksi dan jumlah antrean per sesi.`,
  label: 'Webhooks',
  category: 'api',
  icon: <Webhook size={15} />,
- intro: 'Konfigurasi webhook untuk menerima notifikasi real-time saat pesan masuk atau receipt status diperbarui.',
+ intro: 'Kirim event ke aplikasi lain. Setiap kiriman masuk antrean, ditandatangani HMAC-SHA256, dan dicoba ulang bila gagal. Cakupan bisa dibatasi per sesi, per jenis chat, dan per isi pesan.',
  endpoints: [
  {
  method: 'GET',
  path: '/webhooks',
- desc: 'Daftar webhook yang terdaftar untuk akun Anda.',
+ desc: 'Daftar webhook akun. Secret hanya ditampilkan dalam bentuk tersamarkan (whse••••ef53).',
  auth: 'JWT atau X-API-Key',
  curl: `curl -s ${API_BASE}/webhooks \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
- response: '{"webhooks": [{"id":"wh_1","url":"https://my-app.com/wa-webhook","events": ["message.received","message.status"],"status":"active"}]}',
+ response: '{"webhooks":[{"id":"whk_ab12cd34","url":"https://my-app.com/wa-webhook","events":["message.received"],"secret":"whse••••ef53","status":"active","sessionId":null,"chatTypes":["private"],"matchType":null,"matchValue":null}]}',
  },
-
  {
   method: 'POST',
   path: '/webhooks',
-  desc: 'Daftarkan webhook baru untuk menerima notifikasi event. Secret dibuat otomatis bila tidak dikirim.',
+  desc: 'Daftarkan webhook. Secret dikembalikan HANYA di respons ini. sessionId membatasi ke satu sesi (kosong = semua); chatTypes default ["private"]; matchType + matchValue menyaring isi pesan (kosong = semua pesan).',
   auth: 'X-API-Key',
   curl: `curl -s -X POST ${API_BASE}/webhooks \\\n
  -H"X-API-Key: ${getUserApiKey()}" \\\n
  -H"Content-Type: application/json" \\\n
- -d '{"url":"https://my-app.com/wa-webhook","events": ["message.received","message.status"]}' \\\n
+ -d '{"url":"https://my-app.com/wa-webhook","events":["message.received"],"sessionId":null,"chatTypes":["private"],"matchType":"keyword","matchValue":"harga,ongkir"}' \\\n
  | jq .`,
-  body: '{\n"url":"https://my-app.com/wa-webhook",\n"events": ["message.received","message.status"]\n}',
-  response: '{"success": true,"webhookId":"whk_ab12cd34","status":"active"}',
- }, ],
+  body: '{\n  "url": "https://my-app.com/wa-webhook",\n  "events": ["message.received"],\n  "sessionId": null,\n  "chatTypes": ["private"],\n  "matchType": "keyword",\n  "matchValue": "harga,ongkir"\n}',
+  response: '{"success":true,"webhookId":"whk_ab12cd34","status":"active","secret":"whsec_9f3a...","events":["message.received"],"sessionId":null,"chatTypes":["private"],"matchType":"keyword","matchValue":"harga,ongkir","catatan":"Simpan secret ini sekarang. Nilainya tidak akan ditampilkan lagi."}',
+ },
+ {
+  method: 'PATCH',
+  path: '/webhooks/:id',
+  desc: 'Ubah URL, event, status, cakupan sesi, jenis chat, atau filter isi pesan. Secret tidak berubah. Kirim matchType: null untuk melepas filter.',
+  auth: 'X-API-Key',
+  curl: `curl -s -X PATCH ${API_BASE}/webhooks/whk_ab12cd34 \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"matchType":"contains","matchValue":"invoice"}' | jq .`,
+  body: '{\n  "matchType": "contains",\n  "matchValue": "invoice"\n}',
+  response: '{"success":true,"webhook":{"id":"whk_ab12cd34","events":["message.received"],"chatTypes":["private"],"matchType":"contains","matchValue":"invoice","status":"active"}}',
+ },
+ {
+  method: 'POST',
+  path: '/webhooks/:id/rotate-secret',
+  desc: 'Terbitkan secret baru. Dipakai bila salinan secret lama hilang — menghapus lalu mendaftar ulang akan ikut menghapus riwayat pengiriman.',
+  auth: 'X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/webhooks/whk_ab12cd34/rotate-secret \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
+  response: '{"success":true,"webhookId":"whk_ab12cd34","secret":"whsec_7c21...","catatan":"Perbarui secret di penerima sekarang."}',
+ },
+ {
+  method: 'POST',
+  path: '/webhooks/:id/test',
+  desc: 'Kirim payload uji langsung (bukan lewat antrean) dan kembalikan status code penerima beserta cuplikan balasannya.',
+  auth: 'X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/webhooks/whk_ab12cd34/test \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
+  response: '{"success":true,"statusCode":200,"durationMs":527,"responsePreview":"{\\"ok\\":true}"}',
+ },
+ {
+  method: 'GET',
+  path: '/webhooks/:id/deliveries',
+  desc: 'Riwayat percobaan pengiriman. Filter status=pending|success|failed.',
+  auth: 'X-API-Key',
+  curl: `curl -s "${API_BASE}/webhooks/whk_ab12cd34/deliveries?status=failed" \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
+  response: '{"deliveries":[{"id":"whd_1a2b","event":"message.received","status":"failed","attempts":5,"lastStatusCode":404,"lastError":"HTTP 404 Not Found"}],"total":1,"page":1,"totalPages":1}',
+ },
+ {
+  method: 'POST',
+  path: '/webhooks/deliveries/:id/retry',
+  desc: 'Masukkan kembali satu pengiriman yang gagal ke antrean.',
+  auth: 'X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/webhooks/deliveries/whd_1a2b/retry \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
+  response: '{"success":true,"message":"Pengiriman dimasukkan kembali ke antrean"}',
+ },
+ ],
+ notes: [
+ 'Header setiap kiriman: X-WA-Webhook-Id (ID webhook pengirim, untuk memilih secret yang tepat), X-WA-Event, X-WA-Delivery (unik per pemancaran, sama dengan deliveryId di payload), X-WA-Idempotency-Key (stabil untuk kejadian yang sama), X-WA-Retry-Count (0 = percobaan pertama), X-WA-Timestamp, X-WA-Signature.',
+ 'Dedupe di penerima pakai X-WA-Idempotency-Key, bukan X-WA-Delivery. Kuncinya diturunkan dari isi kejadian (msg_<sesi>_<waMessageId>, ack_<sesi>_<waMessageId>_<status>, sess_<sesi>_<status>_<waktu>), jadi pesan yang dikirim ulang setelah reconnect menghasilkan kunci yang sama.',
+ 'Secret bersifat per webhook. Bila satu penerima menerima kiriman dari beberapa webhook, petakan X-WA-Webhook-Id ke secret masing-masing. Jangan dedupe hanya dengan deliveryId — satu event bisa masuk ke beberapa webhook dengan deliveryId sama tetapi tanda tangan berbeda; kuncinya X-WA-Webhook-Id + X-WA-Delivery.',
+ 'Tanda tangan: sha256=HMAC_SHA256(secret, `${timestamp}.${body}`). Tolak bila selisih timestamp lebih dari 300 detik.',
+ 'Percobaan ulang: 1m → 5m → 30m → 2h → 6h, maksimal 5 kali. HTTP 4xx (selain 408/429) dianggap permanen.',
+ 'Masa simpan body: setelah pengiriman selesai, body dikosongkan setelah WEBHOOK_PAYLOAD_RETENTION_HOURS jam (default 24). Barisnya tetap ada sebagai jejak audit. Pengiriman gagal yang lebih lama dari itu tidak bisa diulang — endpoint retry membalas 409, bukan 404.',
+ 'session.status hanya dipancarkan untuk perubahan yang bertahan (jeda minimum 30 detik), supaya koneksi yang naik-turun tidak membanjiri penerima.',
+ 'Filter isi pesan memakai istilah yang sama dengan aturan chatbot: exact (sama persis), contains (mengandung), keyword (daftar dipisah koma, salah satu cocok sebagai kata utuh), regex (pola, tidak peka huruf besar). Tanpa filter, semua pesan diteruskan.',
+ 'Filter hanya dinilai untuk event yang membawa pesan (message.received). message.status dan session.status tetap terkirim karena tidak punya teks untuk dicocokkan. Pesan bergambar dinilai dari caption-nya; pesan tanpa teks sama sekali tidak lolos filter.',
+ ],
+ },
+ {
+ id: 'chatbot',
+ label: 'Chatbot',
+ category: 'api',
+ icon: <Bot size={15} />,
+ intro: 'Balas otomatis pesan masuk dengan aturan. Cocok untuk menu, jam buka, dan jawaban berulang — tanpa LLM, jadi hasilnya bisa diprediksi. Hanya berlaku di chat pribadi.',
+ endpoints: [
+ {
+ method: 'GET',
+ path: '/chatbot/flows',
+ desc: 'Daftar aturan milik akun, urut prioritas.',
+ auth: 'JWT atau X-API-Key',
+ curl: `curl -s ${API_BASE}/chatbot/flows \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
+ response: '{"flows":[{"id":"bot_1a2b3c","sessionId":null,"name":"Menu utama","enabled":true,"priority":100,"matchType":"keyword","matchValue":"menu,bantuan","replyText":"Ketik angka:\\n1. Harga\\n2. Jam buka","steps":null,"cooldownSeconds":0}]}',
+ },
+ {
+  method: 'POST',
+  path: '/chatbot/flows',
+  desc: 'Tambah aturan. matchType: exact | contains | keyword | regex. sessionId kosong = semua sesi. Wajib punya replyText atau steps.',
+  auth: 'X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/chatbot/flows \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"name":"Menu utama","matchType":"keyword","matchValue":"menu,bantuan","replyText":"Ketik 1 untuk harga, 2 untuk jam buka.","priority":100}' \\\n
+ | length`,
+  body: '{\n  "name": "Menu utama",\n  "matchType": "keyword",\n  "matchValue": "menu,bantuan",\n  "replyText": "Ketik 1 untuk harga, 2 untuk jam buka.",\n  "priority": 100,\n  "sessionId": null\n}',
+  response: '{"success":true,"flow":{"id":"bot_1a2b3c","name":"Menu utama","enabled":true,"matchType":"keyword","matchValue":"menu,bantuan"}}',
+ },
+ {
+  method: 'PATCH',
+  path: '/chatbot/flows/:id',
+  desc: 'Ubah aturan. Field yang dikirim saja yang berubah, jadi menonaktifkan cukup dengan {"enabled":false}.',
+  auth: 'X-API-Key',
+  curl: `curl -s -X PATCH ${API_BASE}/chatbot/flows/bot_1a2b3c \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"replyText":"Ketik 1 untuk harga, 2 untuk jam buka, 3 untuk alamat."}' | jq .`,
+  body: '{\n  "replyText": "Ketik 1 untuk harga, 2 untuk jam buka, 3 untuk alamat."\n}',
+  response: '{"success":true,"flow":{"id":"bot_1a2b3c","replyText":"Ketik 1 untuk harga, 2 untuk jam buka, 3 untuk alamat."}}',
+ },
+ {
+  method: 'DELETE',
+  path: '/chatbot/flows/:id',
+  desc: 'Hapus aturan. Percakapan yang sedang berjalan di aturan ini ikut dihentikan.',
+  auth: 'X-API-Key',
+  curl: `curl -s -X DELETE ${API_BASE}/chatbot/flows/bot_1a2b3c \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
+  response: '{"success":true,"deleted":"bot_1a2b3c"}',
+ },
+ {
+  method: 'POST',
+  path: '/chatbot/test',
+  desc: 'Uji aturan TANPA mengirim WhatsApp. Kembalikan balasan yang AKAN dikirim, termasuk langkah alur berikutnya.',
+  auth: 'X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/chatbot/test \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"sessionId":"sess-abc","text":"menu"}' | jq .`,
+  body: '{\n  "sessionId": "sess-abc",\n  "text": "menu"\n}',
+  response: '{"optOut":false,"matched":true,"reply":"Ketik 1 untuk harga, 2 untuk jam buka.","flowId":"bot_1a2b3c","nextStep":null,"selesai":true,"totalAturanDiperiksa":3}',
+ },
+ {
+  method: 'GET',
+  path: '/chatbot/sessions',
+  desc: 'Posisi percakapan yang sedang berjalan: kontak mana ada di alur mana, dan apakah bot sedang dijeda.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s "${API_BASE}/chatbot/sessions?limit=50" \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
+  response: '{"sessions":[{"sessionId":"sess-abc","contactPhone":"628123456789","currentStep":"harga","flowName":"Menu utama","botPausedUntil":null,"lastActivityAt":"2026-11-13 14:02:11"}]}',
+ },
+ {
+  method: 'GET',
+  path: '/chatbot/optouts',
+  desc: 'Kontak yang mengirim STOP/BERHENTI. Bot tidak membalas mereka.',
+  auth: 'JWT atau X-API-Key',
+  curl: `curl -s ${API_BASE}/chatbot/optouts \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
+  response: '{"optouts":[{"sessionId":"sess-abc","contactPhone":"628123456789","reason":"permintaan pengguna","createdAt":"2026-11-13 14:05:00"}]}',
+ },
+ {
+  method: 'POST',
+  path: '/chatbot/optouts',
+  desc: 'Daftarkan opt-out secara manual, mis. permintaan lewat telepon.',
+  auth: 'X-API-Key',
+  curl: `curl -s -X POST ${API_BASE}/chatbot/optouts \\\n
+ -H"X-API-Key: ${getUserApiKey()}" \\\n
+ -H"Content-Type: application/json" \\\n
+ -d '{"sessionId":"sess-abc","contactPhone":"628123456789","reason":"minta lewat telepon"}' | jq .`,
+  body: '{\n  "sessionId": "sess-abc",\n  "contactPhone": "628123456789",\n  "reason": "minta lewat telepon"\n}',
+  response: '{"success":true}',
+ },
+ {
+  method: 'DELETE',
+  path: '/chatbot/optouts',
+  desc: 'Cabut opt-out. Kontak kembali menerima balasan bot.',
+  auth: 'X-API-Key',
+  curl: `curl -s -X DELETE "${API_BASE}/chatbot/optouts?sessionId=sess-abc&contactPhone=628123456789" \\\n -H"X-API-Key: ${getUserApiKey()}" | jq .`,
+  response: '{"success":true}',
+ },
+ ],
+ notes: [
+ 'Urutan pemeriksaan: opt-out → bot dijeda (takeover operator) → aturan aktif → prioritas terkecil menang.',
+ 'Balasan masuk antrean prioritas tinggi: tetap tercatat di tabel messages, tetap kena pacing anti-ban, dan tetap terlihat di panel.',
+ 'Sebelum mengirim, sistem mengirim sinyal "sedang mengetik" lebih dulu, dengan durasi mengikuti panjang balasan (maksimum 8 detik).',
+ 'Human takeover: begitu operator membalas manual dari nomor yang sama (tanpa batchId), bot berhenti 24 jam untuk kontak itu.',
+ 'Grup selalu dilewati — membalas grup otomatis adalah cara tercepat dilaporkan.',
+ 'Pengirim berbentuk @lid diselesaikan ke nomor aslinya lewat tabel lid_mappings. Bila belum ada pemetaan, bot diam.',
+ ],
  },
  {
  id: 'logs',
@@ -1525,6 +1688,21 @@ export const Docs: React.FC = () => {
  </div>
  </div>
  ))}
+ </div>
+ )}
+
+ {/* Catatan tingkat bagian: berlaku untuk semua endpoint di atasnya. */}
+ {active.category === 'api' && active.notes && active.notes.length > 0 && (
+ <div className="p-3.5 bg-pine-wash/20 border border-pine-line/40 rounded-md space-y-1.5">
+ <div className="text-[11px] font-semibold text-pine flex items-center gap-1.5">
+ <Sparkles size={13} />
+ <span>Catatan Penting:</span>
+ </div>
+ <ul className="space-y-1 pl-4 list-disc text-xs text-ink-soft">
+ {active.notes.map((note, nIdx) => (
+ <li key={nIdx} className="leading-relaxed">{note}</li>
+ ))}
+ </ul>
  </div>
  )}
 

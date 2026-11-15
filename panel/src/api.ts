@@ -617,3 +617,134 @@ export async function apiKirimEmailUji(to: string) {
     body: JSON.stringify({ to }),
   });
 }
+
+// ---------- Inbox (pesan masuk) ----------
+
+export async function apiGetInbound(params: {
+  sessionId?: string;
+  fromPhone?: string;
+  chatType?: string;
+  page?: number;
+  limit?: number;
+  userId?: string;
+} = {}) {
+  const q = new URLSearchParams();
+  if (params.sessionId) q.set('sessionId', params.sessionId);
+  if (params.fromPhone) q.set('fromPhone', params.fromPhone);
+  if (params.chatType) q.set('chatType', params.chatType);
+  if (params.page) q.set('page', String(params.page));
+  if (params.limit) q.set('limit', String(params.limit));
+  if (params.userId) q.set('userId', params.userId);
+  const qs = q.toString();
+  return request(`/inbound${qs ? `?${qs}` : ''}`);
+}
+
+export async function apiGetInboundConversations(limit = 50) {
+  return request(`/inbound/conversations?limit=${limit}`);
+}
+
+export async function apiGetInboundConversation(sessionId: string, fromPhone: string, limit = 100) {
+  const q = new URLSearchParams({ sessionId, fromPhone, limit: String(limit) });
+  return request(`/inbound/conversation?${q.toString()}`);
+}
+
+// ---------- Webhook ----------
+
+export async function apiGetWebhooks() {
+  return request('/webhooks');
+}
+
+export type WebhookMatchType = 'exact' | 'contains' | 'keyword' | 'regex';
+
+export async function apiCreateWebhook(
+  url: string,
+  events: string[],
+  scope: {
+    sessionId?: string | null;
+    chatTypes?: string[];
+    matchType?: WebhookMatchType | null;
+    matchValue?: string | null;
+  } = {},
+) {
+  return request('/webhooks', {
+    method: 'POST',
+    body: JSON.stringify({ url, events, ...scope }),
+  });
+}
+
+export async function apiUpdateWebhook(
+  id: string,
+  patch: {
+    url?: string;
+    events?: string[];
+    status?: 'active' | 'disabled';
+    sessionId?: string | null;
+    chatTypes?: string[] | null;
+    /** `null` melepas filter isi pesan; `undefined` tidak mengubahnya. */
+    matchType?: WebhookMatchType | null;
+    matchValue?: string | null;
+  },
+) {
+  return request(`/webhooks/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+
+/** Ganti secret. Nilai baru hanya dikembalikan sekali oleh endpoint ini. */
+export async function apiRotateWebhookSecret(id: string) {
+  return request(`/webhooks/${id}/rotate-secret`, { method: 'POST' });
+}
+
+export async function apiDeleteWebhook(id: string) {
+  return request(`/webhooks/${id}`, { method: 'DELETE' });
+}
+
+export async function apiTestWebhook(id: string) {
+  return request(`/webhooks/${id}/test`, { method: 'POST' });
+}
+
+export async function apiGetWebhookDeliveries(id: string, params: { status?: string; page?: number; limit?: number } = {}) {
+  const q = new URLSearchParams();
+  if (params.status) q.set('status', params.status);
+  if (params.page) q.set('page', String(params.page));
+  if (params.limit) q.set('limit', String(params.limit));
+  const qs = q.toString();
+  return request(`/webhooks/${id}/deliveries${qs ? `?${qs}` : ''}`);
+}
+
+export async function apiRetryWebhookDelivery(id: string) {
+  return request(`/webhooks/deliveries/${id}/retry`, { method: 'POST' });
+}
+
+// ---------- Chatbot ----------
+
+export async function apiGetChatbotFlows() {
+  return request('/chatbot/flows');
+}
+
+export async function apiCreateChatbotFlow(payload: Record<string, unknown>) {
+  return request('/chatbot/flows', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function apiUpdateChatbotFlow(id: string, patch: Record<string, unknown>) {
+  return request(`/chatbot/flows/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+
+export async function apiDeleteChatbotFlow(id: string) {
+  return request(`/chatbot/flows/${id}`, { method: 'DELETE' });
+}
+
+export async function apiTestChatbot(payload: { sessionId: string; text: string; currentFlowId?: string; currentStep?: string }) {
+  return request('/chatbot/test', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function apiGetChatbotSessions(limit = 50) {
+  return request(`/chatbot/sessions?limit=${limit}`);
+}
+
+export async function apiGetChatbotOptouts() {
+  return request('/chatbot/optouts');
+}
+
+export async function apiDeleteChatbotOptout(sessionId: string, contactPhone: string) {
+  const q = new URLSearchParams({ sessionId, contactPhone });
+  return request(`/chatbot/optouts?${q.toString()}`, { method: 'DELETE' });
+}

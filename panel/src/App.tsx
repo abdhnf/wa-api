@@ -3,11 +3,13 @@ import {
   Smartphone, Users, MessageSquare, BookOpen,
   Activity, LogOut, Menu, X, ShieldAlert, KeyRound,
   Settings, ScrollText, ChevronDown, Shield, Send,
-  PanelLeftClose, PanelLeft
+  PanelLeftClose, PanelLeft, Bot, Webhook
 } from 'lucide-react';
 import { Playground } from './components/Playground';
 import { Docs } from './components/Docs';
 import { ApiLogsPage } from './components/ApiLogsPage';
+import { ChatbotPage } from './components/ChatbotPage';
+import { WebhooksPage } from './components/WebhooksPage';
 import { RealtimeMonitor } from './components/RealtimeMonitor';
 import { AuthPage } from './components/AuthPage';
 import { ResetPasswordPage } from './components/ResetPasswordPage';
@@ -18,12 +20,13 @@ import { UsersPage } from './components/UsersPage';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { BlastAccessModal } from './components/BlastAccessModal';
 import { ThemeToggle } from './components/ThemeToggle';
+import { Toast, type ToastMessage } from './components/Toast';
 import { getStoredAuth, getStoredUser, clearAuth, apiGetMyProfile, apiGetUsers, apiRotateApiKey } from './api';
 import { type User, EMPTY_USERS } from './dummyData';
 
 const emptyForm = { name: '', email: '', password: '', role: 'user', quotaPerDay: 100, status: 'active', assignedSessionId: '' };
 
-type TabId = 'monitor' | 'playground' | 'sessions' | 'logs' | 'users' | 'docs' | 'settings';
+type TabId = 'monitor' | 'playground' | 'sessions' | 'logs' | 'chatbot' | 'webhooks' | 'users' | 'docs' | 'settings';
 
 // Sidebar needs no separate short labels: every label fits the 224px rail.
 const coreNavItems: { id: TabId; label: string; icon: React.ElementType }[] = [
@@ -31,6 +34,8 @@ const coreNavItems: { id: TabId; label: string; icon: React.ElementType }[] = [
   { id: 'monitor', label: 'Monitor & Queue', icon: Activity },
   { id: 'sessions', label: 'Sessions', icon: Smartphone },
   { id: 'logs', label: 'API Logs', icon: ScrollText },
+  { id: 'chatbot', label: 'Chatbot', icon: Bot },
+  { id: 'webhooks', label: 'Webhooks', icon: Webhook },
   { id: 'docs', label: 'Docs', icon: BookOpen },
 ];
 
@@ -105,7 +110,7 @@ export const App: React.FC = () => {
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [blastModalOpen, setBlastModalOpen] = useState(false);
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
   const adminMenuRef = useRef<HTMLDivElement>(null);
 
   const isAdmin = auth.user?.role === 'admin';
@@ -138,10 +143,33 @@ export const App: React.FC = () => {
     return () => document.removeEventListener('keydown', onKey);
   }, [drawerOpen]);
 
-  const showToast = useCallback((msg: string, type: 'success' | 'error' = 'success') => {
+  /**
+   * Menampilkan notifikasi. Penutupannya ditangani komponen `Toast` lewat
+   * `onClose`, bukan `setTimeout` di sini: satu timer per pemanggilan membuat
+   * notifikasi yang datang beruntun saling menutup sebelum waktunya.
+   */
+  const showToast = useCallback((msg: string, type: ToastMessage['type'] = 'success') => {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 4000);
   }, []);
+
+  const tutupToast = useCallback(() => setToast(null), []);
+
+  /**
+   * Versi `showToast` yang diteruskan sebagai prop.
+   *
+   * Kenapa dulu dipisah: `showToast` dibungkus arrow inline di JSX
+   * (`showToast={(msg, type) => showToast(...)}`), sehingga identitasnya
+   * berubah setiap render App. Halaman yang memakainya di dalam `useCallback`
+   * lalu menganggapnya berubah, effect-nya jalan lagi — dan bila effect itu
+   * memanggil API yang gagal, ia memanggil toast lagi: loop permintaan sampai
+   * rate limit backend (240/menit) habis.
+   *
+   * Sekarang `showToast` sendiri sudah `useCallback` tanpa dependensi, jadi
+   * identitasnya stabil. `notify` cukup menjadi alias yang meneruskan tipe apa
+   * adanya — sebelumnya ia memaksa `info` menjadi `success`, sehingga pesan
+   * informasi tampil hijau.
+   */
+  const notify = showToast;
 
   const fetchUsers = useCallback(async () => {
     if (!isAdmin) return;
@@ -289,16 +317,7 @@ export const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-shell text-ink">
-      {toast && (
-        <div
-          role="status"
-          className={`fixed bottom-20 lg:bottom-6 right-4 z-50 px-3.5 py-2.5 text-xs wa-alert ${
-            toast.type === 'success' ? 'wa-alert-success' : 'wa-alert-danger'
-          }`}
-        >
-          {toast.msg}
-        </div>
-      )}
+      {toast && <Toast toast={toast} onClose={tutupToast} />}
 
       {/* Sticky top header: identity, account, and every cross-page action */}
       <header className="wa-header sticky top-0 z-40">
@@ -485,10 +504,12 @@ export const App: React.FC = () => {
           {activeTab === 'playground' && <Playground />}
           {activeTab === 'monitor' && <RealtimeMonitor isAdmin={isAdmin} />}
           {activeTab === 'sessions' && <SessionsPage />}
-          {activeTab === 'logs' && <ApiLogsPage isAdmin={isAdmin} showToast={(msg, type) => showToast(msg, type === 'error' ? 'error' : 'success')} />}
+          {activeTab === 'logs' && <ApiLogsPage isAdmin={isAdmin} showToast={notify} />}
+          {activeTab === 'chatbot' && <ChatbotPage showToast={notify} />}
+          {activeTab === 'webhooks' && <WebhooksPage showToast={notify} />}
           {activeTab === 'docs' && <Docs />}
           {activeTab === 'settings' && isAdmin && <SettingsPage />}
-          {activeTab === 'users' && isAdmin && <UsersPage onNotify={(msg, type) => showToast(msg, type === 'error' ? 'error' : 'success')} />}
+          {activeTab === 'users' && isAdmin && <UsersPage onNotify={notify} />}
 
           {(activeTab === 'users' || activeTab === 'settings') && !isAdmin && (
             <div className="wa-alert wa-alert-danger flex-col items-start gap-1.5">

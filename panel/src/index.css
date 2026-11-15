@@ -241,6 +241,93 @@ a {
   width: 100%;
 }
 
+/* Notifikasi pojok. Menimpa `width: 100%` milik `.wa-alert` — kelas itu
+   dirancang untuk peringatan selebar kolom di dalam halaman, bukan untuk
+   elemen `fixed` di pojok layar. */
+.wa-toast {
+  position: fixed;
+  right: 1rem;
+  bottom: 5rem;
+  z-index: 200;
+  width: auto;
+  max-width: min(22rem, calc(100vw - 2rem));
+  box-shadow: 0 6px 20px rgba(35, 48, 31, 0.16);
+  animation: waToastIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@media (min-width: 1024px) {
+  .wa-toast {
+    bottom: 1.5rem;
+  }
+}
+
+@keyframes waToastIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Modal. `animate-in` dari tailwindcss-animate tidak tersedia di proyek ini,
+   jadi animasinya didefinisikan sendiri. */
+@keyframes waModalFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes waModalPop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.wa-modal-fade {
+  animation: waModalFade 0.15s ease-out forwards;
+}
+
+.wa-modal-pop {
+  animation: waModalPop 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Bubble percakapan di tab Chatbot. */
+.wa-bubble-in {
+  background-color: var(--color-surface-alt);
+  color: var(--color-ink);
+  border: 1px solid var(--color-line);
+  border-bottom-left-radius: 2px;
+}
+
+.wa-bubble-out {
+  background-color: var(--color-pine-wash);
+  color: var(--color-pine-deep);
+  border: 1px solid var(--color-pine-line);
+  border-bottom-right-radius: 2px;
+}
+
+/* Riwayat chat: scrollbar tipis supaya tidak menyaingi bubble. */
+.wa-chat-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+.wa-chat-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.wa-chat-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--color-line-strong);
+  border-radius: 4px;
+}
+
 .wa-badge-neutral,
 .wa-alert-neutral {
   background-color: var(--color-slate-wash);
@@ -453,6 +540,34 @@ a {
   line-height: 1.6;
   overflow-x: auto;
   white-space: pre-wrap;
+}
+
+/*
+ * Target sentuh untuk halaman yang tombolnya memakai h-9 (36px).
+ *
+ * 36px cukup untuk kursor, tidak untuk jempol. Aturan ini hanya berlaku di
+ * lebar sentuh, jadi tampilan desktop tidak berubah. Dibatasi ke `.wa-page`
+ * supaya tidak ikut menaikkan kontrol di halaman lain yang sudah memakai
+ * `.wa-control` / `.wa-tap`.
+ */
+@media (max-width: 1023px) {
+  .wa-page button,
+  .wa-page a[href],
+  .wa-page select,
+  .wa-page textarea,
+  .wa-page input:not([type="checkbox"]):not([type="radio"]) {
+    min-height: 44px;
+  }
+
+  /*
+   * Baris checkbox: yang bisa ditekan adalah label-nya, bukan kotak 16px-nya.
+   * Tanpa tinggi minimum, baris ini hanya setinggi teks dan mudah salah tekan.
+   */
+  .wa-page label:has(> input[type="checkbox"]),
+  .wa-page label:has(> input[type="radio"]) {
+    min-height: 44px;
+    align-items: center;
+  }
 }
 
 .wa-scroll-x {

@@ -25,6 +25,12 @@ interface BatchActionState {
 }
 
 export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({ sessions, showToast }) => {
+  // `showToast` lewat ref: pemuat data tidak boleh bergantung pada identitas
+  // prop, karena prop yang berubah tiap render + toast di jalur galat membentuk
+  // siklus permintaan. Lihat catatan di `ChatbotPage`.
+  const toastRef = useRef(showToast);
+  useEffect(() => { toastRef.current = showToast; }, [showToast]);
+
   const [messages, setMessages] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -81,11 +87,11 @@ export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({ sessions
       }
     } catch (err: any) {
       console.error('Command center fetch error:', err);
-      showToast('Gagal memuat antrean global', 'error');
+      toastRef.current('Gagal memuat antrean global', 'error');
     } finally {
       setLoading(false);
     }
-  }, [selectedSessionId, selectedStatus, batchFilter, phoneSearch, page, limit, showToast]);
+  }, [selectedSessionId, selectedStatus, batchFilter, phoneSearch, page, limit]);
 
   useEffect(() => {
     fetchGlobalQueue();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
  Activity, RefreshCw, Trash2, CheckSquare, Square,
  Filter, AlertCircle, AlertTriangle, CheckCircle2, Clock, Globe, ShieldAlert,
@@ -38,6 +38,14 @@ interface ApiLogsPageProps {
 }
 
 export const ApiLogsPage: React.FC<ApiLogsPageProps> = ({ isAdmin, showToast }) => {
+ // `showToast` disimpan di ref supaya pemuat data tidak bergantung pada
+ // identitas prop. Bila prop itu berubah setiap render induk (mis. arrow inline
+ // di JSX) dan pemuat data memanggilnya di jalur galat, keduanya membentuk
+ // siklus: gagal -> toast -> render induk -> prop baru -> effect jalan lagi.
+ // Lihat catatan lengkap di `ChatbotPage`.
+ const toastRef = useRef(showToast);
+ useEffect(() => { toastRef.current = showToast; }, [showToast]);
+
  const [logs, setLogs] = useState<ApiLogItem[]>([]);
  const [loading, setLoading] = useState(false);
  const [deleting, setDeleting] = useState(false);
@@ -75,11 +83,11 @@ export const ApiLogsPage: React.FC<ApiLogsPageProps> = ({ isAdmin, showToast }) 
  setSelectedIds([]); // reset seleksi saat halaman berganti
  }
  } catch (err: any) {
- showToast(err?.message || 'Gagal memuat log API', 'error');
+ toastRef.current(err?.message || 'Gagal memuat log API', 'error');
  } finally {
  setLoading(false);
  }
- }, [page, limit, statusFilter, showToast]);
+ }, [page, limit, statusFilter]);
 
  useEffect(() => {
  fetchLogs();
