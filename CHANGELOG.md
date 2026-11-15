@@ -5,6 +5,420 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/) dan
 [Semantic Versioning](https://semver.org/lang/id/).
 
 ---
+## [Unreleased] — inbox, webhook yang benar-benar mengirim, dan chatbot
+
+Sebelum ini gateway hanya bisa mengirim. `messages.upsert` dipakai untuk mencatat
+metrik anti-ban lalu isi pesannya dibuang, sehingga tidak ada inbox, tidak ada
+bahan untuk chatbot, dan tidak ada yang bisa dipancarkan sebagai event. Tabel
+`webhooks` dan endpoint `POST/GET /webhooks` sudah ada, tetapi tidak ada satu pun
+baris kode yang mengirim HTTP ke URL terdaftar — padahal `Docs.tsx` sudah
+menjanjikan event `message.received`.
+
+### Added
+
+- **Inbox** (`inbound_messages`, `GET /inbound`, `GET /inbound/conversations`,
+  `GET /inbound/conversation`). Pesan masuk dinormalisasi di `inbound.ts`:
+  `append` (riwayat sinkronisasi), `fromMe`, dan `status@broadcast` disaring;
+  grup disimpan dengan `chat_type = 'group'`; pembungkus `ephemeralMessage` /
+  `viewOnceMessage` / `editedMessage` dibuka. Duplikat ditolak index unik
+  `(session_id, wa_message_id)` — Baileys mengirim ulang pesan setelah reconnect.
+- **Pengiriman webhook** (`webhook_deliveries`, `webhook.ts`). Antrean di SQLite,
+  worker 2 detik, HMAC-SHA256 atas `${timestamp}.${body}`, header `X-WA-Event` /
+  `X-WA-Delivery` / `X-WA-Timestamp` / `X-WA-Signature`, backoff 1m-5m-30m-2h-6h,
+  maksimal 5 percobaan, batas 60 kiriman/menit per webhook. Event:
+  `message.received`, `message.status`, `session.status`.
+- **Endpoint webhook**: `PATCH`/`DELETE /webhooks/:id`, `POST /webhooks/:id/test`
+  (kirim langsung, kembalikan status code + cuplikan balasan),
+  `GET /webhooks/:id/deliveries`, `POST /webhooks/deliveries/:id/retry`.
+- **Chatbot rule-based** (`chatbot_flows`, `chatbot_sessions`, `chatbot_optouts`,
+  `chatbot.ts`, `routes/chatbot.ts`). Pencocokan `exact`/`contains`/`keyword`/
+  `regex`, alur bertingkat dengan `steps`, cooldown per aturan, opt-out
+  (STOP/BERHENTI), dan human takeover 24 jam saat operator membalas manual.
+  Balasan masuk antrean `priority: 'high'` sehingga tetap tercatat di `messages`
+  dan tetap kena pacing.
+- **Panel**: tab Chatbot (aturan, uji coba tanpa mengirim, percakapan, opt-out)
+  dan tab Webhooks (daftar, uji kirim, riwayat + retry).
+- **Filter isi pesan pada webhook** (`webhooks.match_type`/`match_value`,
+  `matcher.ts`). Sebelumnya cakupan webhook hanya bisa dibatasi per sesi dan per
+  jenis chat — keduanya menjawab "dari nomor mana", bukan "pesan apa". Akibatnya
+  webhook ke dashboard tiket tetap menerima setiap sapaan dan setiap balasan
+  "terima kasih". `matchType` (`exact`/`contains`/`keyword`/`regex`) dan
+  `matchValue` kini menyaring saat event dipancarkan. Istilah dan artinya sama
+  persis dengan aturan chatbot karena keduanya memakai `matcher.ts` yang sama —
+  aturan yang sudah terbukti di chatbot bisa disalin apa adanya. Filter hanya
+  dinilai untuk event yang membawa pesan; `message.status` dan `session.status`
+  tetap terkirim karena tidak punya teks untuk dicocokkan. Pesan bergambar
+  dinilai dari caption-nya. Melepas filter: `matchType: null` pada `PATCH`.
+- **Panel Webhook**: pilihan "Filter isi pesan" di modal tambah/ubah, beserta
+  badge di daftar yang menunjukkan filter aktif (`Kata kunci: harga,ongkir`)
+  atau `semua pesan`. Sebelumnya cakupan hanya terlihat dengan membuka formulir.
+- **Header `X-WA-Webhook-Id`** pada setiap kiriman webhook. Secret bersifat per
+  webhook, tetapi payload dan header lama tidak membawa penanda webhook mana yang
+  mengirim. Penerima yang menerima kiriman dari lebih dari satu webhook harus
+  mencoba setiap secret yang dimilikinya untuk memverifikasi tanda tangan — satu
+  request yang gagal menjadi percobaan terhadap N kunci, dan tidak ada cara tahu
+  kiriman itu seharusnya datang dari webhook mana. Nilainya bukan rahasia (hanya
+  penunjuk baris konfigurasi), dan pemalsuan tetap butuh secret. Penyusunan
+  header dipusatkan di `bangunHeaderWebhook()` supaya jalur antrean dan endpoint
+  uji mengirim set header yang persis sama. Lihat README bagian Verifikasi dan
+  `Docs.tsx`; keduanya kini memuat contoh pemetaan id → secret.
+- **`X-WA-Idempotency-Key`** pada setiap kiriman webhook, disimpan di kolom
+  `webhook_deliveries.idempotency_key`. `X-WA-Delivery` hanya menyatukan
+  percobaan ulang dari satu baris antrean karena nilainya dibuat acak per
+  pemancaran; dua pemancaran untuk kejadian yang sama (pesan yang dikirim ulang
+  Baileys setelah reconnect, atau status yang berubah bolak-balik) menghasilkan
+  dua nilai berbeda, sehingga penerima tidak bisa mengenalinya sebagai kiriman
+  ganda. Kunci baru diturunkan dari isi kejadian — `msg_<sesi>_<waMessageId>`,
+  `ack_<sesi>_<waMessageId>_<status>`, `sess_<sesi>_<status>_<waktu>` — dan
+  dihitung SEKALI saat masuk antrean lalu disimpan, supaya percobaan ulang
+  memakai nilai yang sama persis. `session.status` disangat dengan waktu karena
+  transisi ke status yang sama bisa terjadi berkali-kali dan tiap kejadian itu
+  berita tersendiri.
+- **`X-WA-Retry-Count`** pada setiap kiriman, berisi percobaan ke berapa
+  (`0` = pertama). Penerima bisa memakainya untuk observability tanpa menebak
+  dari isi payload.
+- **Batas jumlah webhook per akun** (`WEBHOOK_MAX_PER_USER`, default 16, `0`
+  mematikan). Satu event masuk dipancarkan ke setiap webhook yang cocok, jadi
+  jumlah yang tidak dibatasi melipatgandakan salinan payload, koneksi keluar,
+  dan baris antrean per event. Hanya pendaftaran baru yang ditolak; webhook yang
+  sudah ada tidak disentuh.
+- **Panel: penampil body pengiriman.** Tombol `payload` di riwayat membuka body
+  yang benar-benar dikirim, beserta `X-WA-Idempotency-Key`-nya. Payload sudah
+  tersimpan di baris antrean, jadi tidak ada request tambahan. Sebelumnya
+  "HTTP 500" hanya memberi tahu bahwa penerima menolak, bukan apa yang ditolak.
+
+### Changed
+
+- **Header Chatbot dan Webhook disamakan dengan halaman Playground dan API
+  Logs.** Sebelumnya header di kedua halaman itu telanjang: judul `text-lg
+  font-semibold` tanpa kartu, keterangan `text-sm`, dan tombol `h-9 text-sm`.
+  Sekarang memakai pola yang sama dengan halaman lain di panel: satu kartu
+  `bg-surface border border-line rounded-md p-4 sm:p-5`, ikon dalam kotak
+  40x40 `bg-pine-wash`, judul `text-base font-bold`, keterangan `text-xs
+  text-ink-muted`, dan tombol `px-3.5 py-2 text-xs font-semibold`. Diukur di
+  browser: padding, radius, border, gap, ukuran ikon, ukuran dan bobot judul,
+  ukuran dan warna keterangan, serta padding/ukuran/bobot tombol kini identik
+  dengan halaman API Logs.
+- **Sub-tab Chatbot dan Webhook memakai gaya sub-tab Monitor** (`px-4 py-2
+  text-xs font-semibold`, aktif `bg-pine text-surface`), bukan gaya tab
+  tersendiri.
+- **Header tidak lagi meluber di lebar 640-1024px.** Judul dan keterangan
+  mendapat `min-w-0` supaya bisa menyusut, dan grup tombol aksi memakai
+  `flex-wrap`. Sebelumnya pada 753px tombol "Tambah aturan" terdorong keluar
+  kartu.
+
+- **Halaman Webhook dipecah menjadi dua tab: Endpoint dan Riwayat pengiriman.**
+  Polanya mengikuti sub-tab di halaman Monitor. Daftar dan riwayat menjawab
+  pertanyaan berbeda ("endpoint mana yang aktif" vs "kenapa kiriman ini gagal"),
+  dan menyatukannya membuat satu halaman berisi dua tabel yang saling mendorong
+  ke bawah. Tab Riwayat punya dropdown pemilih webhook; tombol Riwayat di kartu
+  endpoint langsung membuka tab itu dengan webhook tersebut terpilih.
+- **Riwayat pengiriman kembali memakai tabel**, bukan kartu. Tabelnya memakai
+  `min-w-[720px]` di dalam `overflow-x-auto`, pola yang sama dengan tabel
+  Delivery Queue di halaman Monitor: tabel menggeser di dalam kartunya sendiri,
+  halaman tidak ikut menggeser. Kolom Waktu diletakkan paling kiri karena itu
+  yang dicari lebih dulu saat menelusuri kegagalan.
+- **Kartu endpoint webhook ditata ulang untuk layar sempit.** Isi kartu (badge
+  status, URL, tag event, meta secret) tampil lebih dulu, lalu enam tombol aksi
+  di baris sendiri di bawahnya; di `sm` ke atas aksi kembali ke kanan. Tombol
+  Uji dan Riwayat menjadi ikon saja di bawah `sm` (dengan `aria-label`), supaya
+  keenam aksi muat dalam satu baris 44px di kartu 336px. URL memakai
+  `break-all` agar tidak memaksa satu kata per baris.
+- **Halaman Chatbot dan Webhook kini punya layout mobile sendiri, bukan versi
+  desktop yang diperkecil.** Tiga hal yang berubah:
+  - **Percakapan chatbot** memakai pola master-detail di bawah `lg`: daftar
+    ATAU jendela chat, tidak keduanya. Sebelumnya keduanya ditumpuk sehingga
+    halaman setinggi ~120vh dan daftar harus digulir setiap kali membuka satu
+    percakapan.
+  - **Bar tab chatbot** membungkus menjadi dua baris di layar sempit, bukan
+    meluber. Keempat tab tetap terlihat tanpa perlu digeser.
+  - **Grup tombol aksi** pada kartu tidak lagi memaksa satu baris dengan
+    `shrink-0`; isi kartu dan aksinya ditumpuk di layar sempit.
+- **Target sentuh 44px di halaman Chatbot dan Webhook** lewat aturan
+  `.wa-page` di `index.css`, hanya berlaku di bawah 1024px. Tombol di kedua
+  halaman memakai `h-9` (36px), yang cukup untuk kursor tetapi tidak untuk
+  jempol. Input, select, dan baris checkbox ikut dinaikkan; checkbox dan radio
+  sendiri tidak.
+- **Modal memakai `100dvh`, bukan `100vh`.** Di browser mobile `100vh` termasuk
+  chrome browser, sehingga footer modal bisa terdorong keluar layar.
+- **Em dash di teks yang tampil diganti** titik dua, titik, atau tanda kurung
+  pada kedua halaman (toast, judul riwayat, label hint, placeholder sel kosong).
+  Komentar kode tidak diubah.
+- **Pencocokan teks dipindah ke `matcher.ts`** dan dipakai bersama oleh aturan
+  chatbot serta filter webhook. Sebelumnya logikanya hanya ada di `chatbot.ts`;
+  menyalinnya ke webhook akan membuat dua arti "cocok" yang perlahan berbeda —
+  dan perbedaannya baru terlihat saat ada pesan nyata yang tidak diteruskan,
+  jauh setelah konfigurasi disimpan.
+- **`webhooks.match_type`/`match_value` bisa dilepas lewat `PATCH` dengan
+  `matchType: null`**. `matchValue` ikut dihapus agar tidak tersisa nilai yatim
+  yang menyala lagi begitu tipe dipasang.
+- **Regex pada filter webhook divalidasi saat disimpan.** Regex yang salah tulis
+  membuat filter tidak pernah cocok, dan bagi penerima itu tampak sama dengan
+  "belum ada pesan" — bukan "aturan saya rusak".
+- **Secret webhook minimal 16 karakter** (sebelumnya 8). HMAC dihitung atas isi
+  yang diketahui penyerang, jadi secret pendek bisa ditebak dengan brute-force
+  dan tebakan yang benar langsung menghasilkan tanda tangan yang sah. Batas ini
+  hanya berlaku untuk secret yang dikirim klien; secret hasil generate server
+  sudah 48 karakter.
+- **URL webhook menolak kredensial tertanam** (`https://user:pass@host/…`) dan
+  panjang di atas 2048 karakter. Kredensial di URL tidak pernah dipakai pengirim,
+  tetapi tersimpan di database dan ikut tampil di panel serta riwayat.
+
+### Fixed
+
+- **Body pengiriman webhook tidak lagi disimpan sebulan penuh.**
+  `webhook_deliveries.payload` memuat isi pesan pelanggan, dan sebelumnya baru
+  hilang saat barisnya dipangkas 30 hari kemudian — termasuk untuk pengiriman
+  yang sudah sukses, yang nilainya hanya berguna untuk menelusuri masalah dalam
+  hitungan jam. Sekarang body dikosongkan setelah
+  `WEBHOOK_PAYLOAD_RETENTION_HOURS` jam (default 24) untuk baris yang sudah
+  selesai; barisnya tetap ada sebagai jejak audit. Baris `pending` tidak
+  disentuh karena body-nya masih dibutuhkan worker. Pembersihan berjalan tiap
+  jam, bukan menumpang pembersih harian, supaya jendela 24 jam tidak melebar
+  jadi 48 jam. `0` mematikan pembersihan.
+- **`POST /webhooks/deliveries/:id/retry` membalas `409` untuk body yang sudah
+  dibersihkan**, bukan `404`. Sebelumnya baris seperti itu akan "berhasil"
+  diantrekan dan mengirim string kosong ke penerima. Panel kini menyembunyikan
+  tombol `ulangi` untuk baris tersebut dan menampilkan `body dibersihkan`.
+- **CHANGELOG: 894 baris diawali nomor baris ganda** (`1|1|# Changelog`) yang
+  ikut tertulis ke dalam berkas. Awalan itu dibersihkan; isinya tidak berubah.
+  Lima baris tabel pada bagian audit juga jadi utuh kembali sebagai tabel.
+- `secret` webhook tidak lagi dikembalikan mentah pada setiap pembacaan; hanya
+  ditampilkan sekali saat dibuat, setelah itu disamarkan.
+- `events` webhook divalidasi terhadap event yang benar-benar dipancarkan.
+  Sebelumnya string apa pun diterima, termasuk langganan yang tidak akan pernah
+  terkirim.
+- `deliveryId` pada payload dan header `X-WA-Delivery` kini sama. Sebelumnya
+  dibuat dua kali, sehingga penerima tidak punya kunci tunggal untuk dedupe.
+- `message.status` hanya dipancarkan saat status benar-benar berubah. `pacing`
+  dipanggil berkali-kali untuk satu pesan; tanpa syarat ini penerima dibanjiri
+  kabar yang isinya sama.
+- Alur chatbot yang dinonaktifkan di tengah percakapan kini berhenti, bukan
+  melanjutkan memakai aturan yang sudah tidak dipakai.
+- `X-WA-Delivery` pada endpoint uji kini sama dengan `deliveryId` di body-nya.
+  Sebelumnya dibuat dua kali, sehingga payload uji tidak bisa dicocokkan dengan
+  header-nya oleh penerima yang melakukan dedupe.
+- Catatan pada `POST /webhooks/:id/rotate-secret` menyatakan kiriman pending
+  memakai tanda tangan lama sampai dicoba ulang. Itu keliru: secret tidak pernah
+  disimpan di baris antrean, `kirimSatu` membacanya ulang dari database setiap
+  percobaan, sehingga kiriman pending langsung memakai secret baru.
+
+### Catatan
+
+- `userId` ikut dikirim pada payload `message.received`. Tanpa itu penerima
+  harus menebak pemilik pesan dari sesi, dan hasilnya `unmapped` untuk pesan di
+  luar kampanye — yaitu hampir semuanya.
+- URL webhook boleh menunjuk alamat privat (dashboard biasanya di jaringan yang
+  sama), tetapi alamat metadata cloud ditolak.
+
+### Fixed (lanjutan) — 429 saat membuka tab Chatbot & Webhooks
+
+`App.tsx` mengirim `showToast` sebagai arrow inline di JSX, sehingga identitas
+prop itu berubah pada setiap render App. Halaman yang memakainya di dalam
+`useCallback` lalu menganggapnya berubah, effect-nya jalan lagi, dan karena
+pemuat data memanggil `showToast` di jalur galat, siklusnya menutup:
+gagal -> toast -> render App -> prop baru -> effect jalan lagi. Backend
+membatasi 240 permintaan/menit per IP, jadi batas itu habis dalam hitungan detik
+dan halaman menampilkan 429.
+
+- `App.tsx` kini punya satu callback stabil `notify` yang dipakai bersama oleh
+  `ApiLogsPage`, `ChatbotPage`, `WebhooksPage`, dan `UsersPage`.
+- `ChatbotPage`, `WebhooksPage`, `ApiLogsPage`, dan `AdminCommandCenter`
+  menyimpan `showToast` di ref dan mengeluarkannya dari daftar dependensi, jadi
+  tetap aman walau induk mengirim fungsi baru.
+- `ChatbotPage`: `ujiSession` dikeluarkan dari dependensi pemuat data (nilainya
+  hanya untuk pilihan awal, dan memasukkannya memicu pemuatan ulang daftar).
+
+Bukti: uji render React 19 + jsdom dengan API yang selalu gagal — pola lama
+menghasilkan 301 permintaan, pola baru 1 permintaan. Di server nyata, 20 kali
+membuka tab Chatbot + 20 kali tab Webhooks = 60 permintaan, tanpa 429.
+
+### Verifikasi
+
+- Normalizer: 10 kasus (teks, extended, fromMe, append, status, grup, media,
+  ephemeral, reaction, device suffix) — semua sesuai harapan.
+- Webhook: tanda tangan valid diterima penerima uji; 404 dianggap permanen
+  (menyerah), koneksi ditolak dicoba ulang dengan backoff; `deliveryId` payload
+  sama dengan header.
+- Chatbot: 20 kasus (opt-out, empat tipe pencocokan, alur bertingkat, jawaban
+  tak dikenal, alur nonaktif) — semua lulus.
+- End-to-end: pesan masuk di wa-api -> tersimpan di inbox -> event terkirim ->
+  tersimpan di dashboard dengan `user_id` benar; `message.status` memperbarui
+  hitungan kampanye dan idempoten saat dikirim ulang.
+- `tsc` bersih (backend & panel), build backend/panel/dashboard bersih.
+
+### Added — edit aturan, modal, bubble chat, dan typing
+
+- **Edit aturan chatbot.** Sebelumnya hanya bisa tambah/hapus/aktif-nonaktif;
+  mengubah balasan berarti menghapus lalu membuat ulang, yang ikut memutus
+  percakapan yang sedang berjalan di aturan itu. Endpoint `PATCH` sudah ada
+  tetapi tidak punya UI. Kini tombol pensil membuka formulir yang sama dengan
+  "Tambah", terisi nilai lama.
+- **Edit webhook.** Sama: `PATCH /webhooks/:id` sudah menerima URL, event, dan
+  cakupan, tetapi panel tidak pernah memakainya — mengganti URL berarti
+  mendaftar ulang dan kehilangan riwayat pengiriman.
+- **Komponen `Modal` dan `ConfirmDialog` bersama** (`components/ui/Modal.tsx`).
+  Sebelumnya setiap halaman menulis sendiri lapisan `fixed inset-0` dengan
+  perilaku berbeda: ada yang bisa ditutup dengan Escape, ada yang tidak; ada
+  yang mengunci scroll latar, ada yang tidak. Sekarang satu implementasi:
+  Escape menutup (kecuali sedang menyimpan), klik latar menutup, scroll latar
+  dikunci, fokus berpindah ke modal lalu kembali ke pemicunya.
+- **`window.confirm` diganti `ConfirmDialog`** di Chatbot dan Webhooks. Kotak
+  bawaan browser memblokir seluruh utas sehingga spinner tombol berhenti
+  berputar, tidak bisa menjelaskan apa yang akan hilang, dan tidak mengikuti
+  bahasa visual panel.
+- **Tab Percakapan berbentuk bubble chat.** Sebelumnya hanya daftar kartu tanpa
+  isi percakapan. Sekarang dua panel: daftar percakapan (cari nomor/nama,
+  pesan terakhir, jumlah pesan) dan jendela riwayat dengan bubble, pemisah
+  tanggal, serta jam per pesan. Riwayat diambil dari
+  `GET /inbound/conversation`.
+- **Sinyal "sedang mengetik" pada jalur prioritas tinggi.** Jalur ini dipakai
+  balasan chatbot dan balasan manual operator. Sebelumnya ia hanya diam 1 detik
+  lalu mengirim, sehingga balasan muncul tiba-tiba. Sekarang
+  `computeTypingPlan()` dipakai — durasi mengikuti panjang balasan, dibatasi 8
+  detik. Rencana presence yang sama sudah dipakai jalur blast, jadi tidak ada
+  dua perilaku berbeda.
+- **Dokumentasi Chatbot & Webhook di panel.** Bagian `webhooks` hanya memuat 2
+  endpoint dan contoh responsnya sudah tidak sesuai (tidak ada `secret`).
+  Sekarang 7 endpoint webhook (termasuk `rotate-secret` dan `deliveries`) dan 8
+  endpoint chatbot, masing-masing dengan catatan verifikasi tanda tangan,
+  cakupan sesi/jenis chat, dan urutan pemeriksaan aturan.
+
+### Verifikasi (tambah/edit)
+
+- `PATCH /chatbot/flows/:id` parsial: mengirim `{"enabled":false}` saja tidak
+  menghapus `name`, `replyText`, maupun `matchValue`. Mengirim
+  `{"sessionId":null}` mengosongkan cakupan sesi tanpa menyentuh field lain.
+- `PATCH /webhooks/:id` mengubah URL, event, dan `chatTypes` sekaligus; secret
+  tetap sama (rotasi hanya lewat endpoint khusus).
+- `computeTypingPlan()` diuji pada panjang pesan 3–1200 karakter: durasi naik
+  mengikuti panjang, lalu dipotong tepat 8000 ms. Dari 200 sampel acak, tidak
+  ada satu pun yang melewati batas.
+- Riwayat percakapan dari data nyata: `GET /inbound/conversations` menampilkan
+  2 percakapan, dan `GET /inbound/conversation` mengembalikan 5 pesan untuk
+  salah satunya — dengan `fromPhone` sudah berupa nomor asli meski
+  `fromJid`-nya `@lid`.
+- Kelas CSS baru (`wa-modal-pop`, `wa-bubble-in/out`, `wa-chat-scroll`)
+  terkonfirmasi ada di bundel hasil build; `wa-typing-dot` yang sempat
+  ditambahkan tetapi tidak dipakai sudah dihapus.
+- `tsc` bersih (backend & panel), build backend & panel bersih.
+
+
+### Fixed — audit lanjutan (404 palsu, cakupan webhook, dan toast)
+
+**404 pada `/chatbot/flows` dan `/webhooks/:id/test` bukan bug kode.** Proses
+`node dist/server.js` yang berjalan sudah hidup sejak 3 November, sebelum rute
+itu ada. Berkas `dist/` sudah diperbarui tetapi prosesnya belum dimuat ulang,
+jadi Fastify melayani rute versi lama. Setelah restart, semua endpoint menjawab
+(401 tanpa kunci, 200 dengan kunci).
+
+Yang benar-benar salah:
+
+- **Toast tidak sesuai template.** `App.tsx` memakai kelas `.wa-alert`, yang
+  menetapkan `width: 100%` untuk peringatan selebar kolom di dalam halaman. Pada
+  elemen `fixed` hasilnya selebar layar, bukan sekotak kecil di pojok. Komponen
+  `Toast.tsx` yang sudah ada di repo ternyata tidak pernah dipakai, dan kelas
+  `animate-in` di dalamnya tidak berefek karena plugin `tailwindcss-animate`
+  tidak terpasang. Sekarang `App.tsx` memakai `Toast.tsx`, dengan kelas baru
+  `.wa-toast` (lebar mengikuti isi, maksimum 22rem) dan keyframe sendiri.
+  Varian `info` juga tidak lagi dipaksa menjadi `success` hijau.
+- **Webhook tidak bisa dibatasi per sesi maupun per jenis chat.** Satu webhook
+  menerima semua pesan dari semua nomor milik akun. Untuk operasi dengan
+  beberapa nomor, dashboard nomor A ikut menerima pesan nomor B. Ditambahkan
+  kolom `session_id` dan `chat_types` pada `webhooks`, penyaringan di
+  `listActiveWebhooksForEvent()`, serta pemilih sesi + jenis chat di panel.
+  Webhook lama di-backfill ke `["private"]`.
+- **Sesi fiktif diterima sebagai cakupan.** `tolakSesi()` meloloskan admin untuk
+  sesi apa pun. Akibatnya webhook/aturan chatbot bisa disimpan dengan
+  `sessionId` yang tidak ada — konfigurasi yang tidak akan pernah menyala, dan
+  kesalahannya baru terlihat berhari-hari kemudian. Ditambahkan pemeriksaan
+  keberadaan sesi (404) di webhook maupun chatbot.
+- **`session.status` tidak pernah dipancarkan.** Event ini terdaftar, bisa
+  dilanggan di panel, dan lolos validasi — tetapi tidak ada satu pun pemanggil
+  `pancarkanEvent('session.status', ...)`. Pelanggannya menunggu event yang
+  tidak akan datang. Ditambahkan `onSessionStatusCallback` di engine (dipanggil
+  saat `open` dan `close`) dan handler `session.status` di dashboard.
+- **`session.status` membanjiri antrean.** Setelah dipasang, terlihat sesi
+  nyata naik-turun tiap ~2 detik pada jaringan buruk: 350 baris antrean dalam 4
+  menit. Emisi sekarang di-debounce — status terakhir disimpan dan jeda minimum
+  30 detik diberlakukan, sehingga hanya perubahan yang bertahan yang dikirim.
+- **Secret tidak muncul untuk webhook lama.** Secret hanya dikembalikan sekali
+  saat dibuat; webhook yang didaftarkan sebelum perilaku itu ada tidak punya
+  salinan di mana pun, dan panel hanya menampilkan `whse••••ef53`. Menghapus
+  lalu mendaftar ulang akan menghapus riwayat pengiriman. Ditambahkan
+  `POST /webhooks/:id/rotate-secret` + tombol **Secret** di panel.
+- **Nama sesi tidak terbaca.** Panel menampilkan id mentah (`sess-mu7l7bol`) di
+  daftar aturan, percakapan, dan opt-out. Sekarang memakai nama nomor + status
+  koneksi.
+- **Inbox dashboard tidak bisa dipisah per sesi.** `GET /api/crm/inbox` selalu
+  mengembalikan semua sesi. Ditambahkan filter `sessionId`, daftar sesi yang
+  benar-benar punya pesan masuk, dan pemilih sesi di halaman Inbox.
+
+### Verifikasi (audit lanjutan)
+
+- Penyaringan cakupan diuji terhadap data nyata: hook yang dibatasi ke satu sesi
+  hanya muncul untuk sesi itu; hook `chatTypes: ["private","group"]` muncul untuk
+  keduanya, sedangkan hook `["private"]` tidak muncul untuk pesan grup.
+- `session.status` end-to-end: event terkirim ke penerima uji dengan
+  `sigValid=true` (HMAC terverifikasi), lalu dihapus.
+- Inbox dashboard: dua sesi dengan pesan berbeda -> "Semua sesi" mengembalikan
+  dua percakapan, filter per sesi mengembalikan satu, dan daftar sesi tetap
+  lengkap agar pemilih tidak menyusut setelah dipilih.
+- Rotasi secret, penolakan sesi fiktif (404), dan penolakan `chatTypes` asing
+  (400) diuji lewat HTTP.
+- Semua endpoint baru diuji dengan kunci nyata: `chatbot/flows`,
+  `chatbot/sessions`, `chatbot/optouts`, `webhooks`, `inbound` -> 200.
+- `tsc` bersih, build backend & panel bersih, `php -l` bersih.
+
+### Fixed — LID diperlakukan sebagai nomor telepon
+
+Ditemukan dari lalu lintas nyata saat audit, bukan dari uji sintetis. Satu pesan
+masuk dari `14396814266545@lid` tersimpan dengan `from_phone = "14396814266545"`,
+lalu chatbot membalas ke angka itu dan WhatsApp menjawab `not_registered`.
+
+Tiga cacat yang saling menutupi:
+
+1. **`phoneFromJid()` tidak mengenal `@lid`.** JID `@g.us`, `@broadcast`, dan
+   `@newsletter` ditolak, tetapi `@lid` lolos dan digitnya dianggap nomor
+   telepon. Angka itu id internal WhatsApp, bukan nomor yang bisa dikirimi
+   pesan.
+2. **`LidResolver` tidak pernah dipakai jalur inbox.** Resolver lengkap sudah
+   ada (`lid-resolver.ts`) beserta tabel `lid_mappings` berisi 9 pemetaan yang
+   benar — termasuk `14396814266545@lid -> 6282242168002` — tetapi `inbound.ts`
+   tidak pernah menanyakannya.
+3. **`learnLidFromMessageKey()` tidak pernah dipanggil.** Fungsi itu ada di
+   `session-manager.ts` dan mengekstrak pasangan LID<->nomor dari
+   `remoteJid`/`remoteJidAlt` tiap pesan — sumber pemetaan paling sering — tetapi
+   tidak ada satu pun pemanggil, sehingga resolver hanya terisi dari metadata
+   grup.
+
+Perbaikan:
+
+- `phoneFromJid()` mengembalikan `null` untuk `@lid`.
+- `normalizeInbound()` menerima penyelesai LID dan menentukan nomor berurutan:
+  JID itu sendiri -> `remoteJidAlt` -> pemetaan tersimpan -> `null`. Urutan ini
+  memakai data yang paling langsung tersedia lebih dulu.
+- `setPenyelesaiLid()` menyuntikkan `manager.getLidResolver().getPn()` ke jalur
+  inbox, memakai resolver yang sama dengan jalur kirim supaya percakapan satu
+  orang tidak terpecah dua kontak.
+- `learnLidFromMessageKey()` kini dipanggil untuk setiap pesan masuk, sebelum
+  normalisasi, sehingga pemetaan baru terkumpul dari lalu lintas biasa.
+- Pengirim yang LID-nya belum diketahui menghasilkan `fromPhone = null`.
+  Chatbot memang sudah berhenti untuk kasus itu — lebih baik diam daripada
+  mengirim ke alamat yang tidak ada.
+- Tiga baris lama di `inbound_messages` diperbaiki lewat `UPDATE` yang
+  memetakan `from_jid` ke `lid_mappings.phone` (aman: index unik ada di
+  `(session_id, wa_message_id)`, bukan di nomor).
+
+Verifikasi: `LidResolver` di-hydrate dari tabel sungguhan (9 mapping) lalu
+`normalizeInbound` dipanggil dengan key `@lid` — hasilnya
+`fromPhone = 6283846612629`, sesuai pemetaan. LID tanpa pemetaan menghasilkan
+`null`. `GET /inbound/conversations` kini menampilkan `6282242168002`, bukan
+`14396814266545`.
+
+---
+
+
 
 ## [Unreleased] — alamat API tidak lagi tertanam ke port dev
 

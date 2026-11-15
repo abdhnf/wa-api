@@ -15,8 +15,9 @@ Production-ready, multi-tenant WhatsApp API Gateway built with **Fastify v5**, *
 - [3. Getting Started / Overview](#3-getting-started--overview)
 - [4. Monorepo Structure](#4-monorepo-structure)
 - [5. API Reference Summary](#5-api-reference-summary)
-- [6. Anti-Ban Engine & Telemetry](#6-anti-ban-engine--telemetry)
-- [7. License](#7-license)
+- [6. Inbox, Webhook & Chatbot](#6-inbox-webhook--chatbot)
+- [7. Anti-Ban Engine & Telemetry](#7-anti-ban-engine--telemetry)
+- [8. License](#8-license)
 
 ---
 
@@ -312,13 +313,206 @@ wa-api/
 | `POST` | `/api/v1/messages/send` | Kirim pesan teks (auto-route atau sesi spesifik) | API Key / JWT |
 | `POST` | `/api/v1/messages/send-media` | Kirim media file (gambar, video, audio, PDF) | API Key / JWT |
 | `GET` | `/api/v1/messages/status/:id` | Cek status receipt (sent, delivered, read) | API Key / JWT |
+| `GET` | `/api/v1/inbound` | Daftar pesan masuk dengan filter & paginasi | API Key / JWT |
+| `GET` | `/api/v1/inbound/conversations` | Ringkasan percakapan (satu baris per nomor) | API Key / JWT |
+| `GET` | `/api/v1/inbound/conversation` | Riwayat satu percakapan | API Key / JWT |
+| `POST` | `/api/v1/webhooks` | Daftarkan webhook (secret ditampilkan sekali) | API Key / JWT |
+| `GET` | `/api/v1/webhooks` | Daftar webhook (secret disamarkan) | API Key / JWT |
+| `PATCH` | `/api/v1/webhooks/:id` | Ubah URL, event, status, cakupan, atau filter isi pesan | API Key / JWT |
+| `DELETE` | `/api/v1/webhooks/:id` | Hapus webhook beserta riwayatnya | API Key / JWT |
+| `POST` | `/api/v1/webhooks/:id/rotate-secret` | Terbitkan secret baru (ditampilkan sekali) | API Key / JWT |
+| `POST` | `/api/v1/webhooks/:id/test` | Kirim payload uji, kembalikan status code | API Key / JWT |
+| `GET` | `/api/v1/webhooks/:id/deliveries` | Riwayat pengiriman + status tiap percobaan | API Key / JWT |
+| `POST` | `/api/v1/webhooks/deliveries/:id/retry` | Masukkan kembali pengiriman gagal ke antrean | API Key / JWT |
+| `GET` | `/api/v1/chatbot/flows` | Daftar aturan chatbot | API Key / JWT |
+| `POST` | `/api/v1/chatbot/flows` | Tambah aturan chatbot | API Key / JWT |
+| `PATCH` | `/api/v1/chatbot/flows/:id` | Ubah aturan chatbot | API Key / JWT |
+| `DELETE` | `/api/v1/chatbot/flows/:id` | Hapus aturan chatbot | API Key / JWT |
+| `POST` | `/api/v1/chatbot/test` | Uji aturan tanpa mengirim WhatsApp | API Key / JWT |
+| `GET` | `/api/v1/chatbot/sessions` | Percakapan yang sedang berjalan | API Key / JWT |
+| `GET` | `/api/v1/chatbot/optouts` | Kontak yang meminta berhenti | API Key / JWT |
 | `GET` | `/api/v1/api-logs` | Lihat histori API logs dengan paginasi & filter | Bearer (Admin) |
 | `DELETE` | `/api/v1/api-logs` | Hapus log terpilih atau bersihkan seluruh histori | Bearer (Admin) |
 
 ---
 
-## 6. Anti-Ban Engine & Telemetry
+## 6. Inbox, Webhook & Chatbot
 
+### Inbox
+Pesan masuk disimpan ke tabel `inbound_messages` dan bisa dibaca lewat
+`GET /api/v1/inbound`. Yang disaring: pesan dari diri sendiri, riwayat hasil
+sinkronisasi (`append`), dan status story. Grup tetap disimpan dengan
+`chat_type = 'group'`, tetapi chatbot tidak membalasnya.
+
+**Pengirim berbentuk LID.** Sejak WhatsApp memperkenalkan Linked Identity, satu
+kontak punya dua alamat: `628xxx@s.whatsapp.net` dan `14396814266545@lid`. Angka
+pada bentuk `@lid` adalah id internal, **bukan nomor telepon** — mengirim pesan
+ke sana berakhir `not_registered`. Nomor ditentukan berurutan:
+
+1. JID pengirim sendiri, bila sudah berbentuk nomor.
+2. `remoteJidAlt`, yang sering disertakan Baileys.
+3. Pemetaan tersimpan di `lid_mappings` (diisi otomatis dari setiap pesan masuk
+   dan dari metadata grup).
+4. Tidak ada -> `fromPhone = null`, dan chatbot tidak membalas.
+
+`from_jid` tetap menyimpan bentuk aslinya untuk penelusuran.
+
+### Webhook
+Webhook dikirim dari antrean (`webhook_deliveries`), bukan dari jalur permintaan
+— penerima yang lambat tidak menahan pemrosesan pesan WhatsApp.
+
+Event yang tersedia: `message.received`, `message.status`, `session.status`.
+
+**Cakupan.** Satu webhook tidak harus menerima semua pesan akun. Saat
+mendaftar (`POST /api/v1/webhooks`) atau mengubahnya (`PATCH`):
+
+| Field | Arti |
+| :--- | :--- |
+| `sessionId` | Batasi ke satu sesi. `null`/kosong = semua sesi. Harus sesi yang ada dan milik Anda. |
+| `chatTypes` | `private` / `group` / `broadcast`. Default `["private"]`. `null` = semua jenis. |
+| `matchType` | `exact` / `contains` / `keyword` / `regex`. `null` = semua pesan diteruskan. |
+| `matchValue` | Nilai yang dicocokkan. Wajib diisi bersama `matchType`. |
+
+Penyaringan dilakukan saat event dipancarkan, bukan oleh penerima. Penerima yang
+hanya menangani chat pribadi tidak akan pernah menerima pesan grup.
+
+**Filter isi pesan.** `sessionId` dan `chatTypes` menjawab "dari nomor mana",
+bukan "pesan apa". Tanpa `matchType`, webhook ke dashboard tiket tetap menerima
+setiap sapaan dan setiap balasan "terima kasih" — penerima harus menyaring
+sendiri, setelah kuota jaringannya terpakai. Istilah dan artinya sengaja sama
+dengan aturan chatbot, sehingga aturan yang sudah terbukti di sana bisa
+dipindahkan apa adanya:
+
+| `matchType` | Cocok bila |
+| :--- | :--- |
+| `exact` | Seluruh teks sama (tanpa beda huruf besar/kecil). |
+| `contains` | Teks memuat rangkaian tersebut. |
+| `keyword` | Salah satu kata pada daftar dipisah koma muncul sebagai kata utuh. `harga` tidak cocok pada `hargai`. |
+| `regex` | Pola cocok. Divalidasi saat disimpan; regex rusak ditolak, bukan dibiarkan diam. |
+
+Filter hanya dinilai untuk event yang **membawa pesan** (`message.received`).
+`message.status` dan `session.status` tetap terkirim: keduanya tidak punya teks
+untuk dicocokkan, dan menilainya akan membuat webhook berfilter diam-diam
+berhenti menerima perubahan status. Pesan bergambar dinilai dari caption-nya;
+pesan tanpa teks sama sekali tidak lolos filter.
+
+Melepas filter: kirim `matchType: null` pada `PATCH` — `matchValue` ikut
+dihapus, supaya tidak tersisa nilai yatim yang menyala lagi saat tipe dipasang.
+
+`session.status` hanya dipancarkan untuk **perubahan yang bertahan**: status
+terakhir per sesi disimpan dan jeda minimum 30 detik diberlakukan. Koneksi
+WhatsApp bisa naik-turun beberapa detik sekali saat jaringan buruk; tanpa
+penjagaan itu setiap kedipan menjadi satu kiriman dan penerima dibanjiri event
+`connected`/`disconnected` yang tidak informatif.
+
+Setiap kiriman membawa header:
+
+| Header | Isi |
+| :--- | :--- |
+| `X-WA-Webhook-Id` | ID webhook pengirim (`whk_…`), untuk memilih secret yang tepat |
+| `X-WA-Event` | Nama event |
+| `X-WA-Delivery` | ID unik satu pemancaran, sama dengan `deliveryId` di payload |
+| `X-WA-Idempotency-Key` | Kunci stabil untuk kejadian ini — sama pada dua pemancaran kejadian yang sama |
+| `X-WA-Retry-Count` | Percobaan ke berapa (`0` = pertama) |
+| `X-WA-Timestamp` | Epoch detik saat kirim |
+| `X-WA-Signature` | `sha256=<hmac>` atas `${timestamp}.${body}` |
+
+**`X-WA-Delivery` vs `X-WA-Idempotency-Key`.** Keduanya menjawab pertanyaan
+berbeda. `X-WA-Delivery` unik per pemancaran, jadi ia hanya menyatukan percobaan
+ulang dari satu baris antrean. `X-WA-Idempotency-Key` diturunkan dari isi
+kejadian (`msg_<sesi>_<waMessageId>`, `ack_<sesi>_<waMessageId>_<status>`,
+`sess_<sesi>_<status>_<waktu>`), sehingga pesan yang dikirim ulang Baileys
+setelah reconnect menghasilkan kunci yang sama. **Dedupe di penerima sebaiknya
+memakai `X-WA-Idempotency-Key`**, bukan `X-WA-Delivery`.
+
+Secret bersifat **per webhook**, jadi penerima yang menerima kiriman dari lebih
+dari satu webhook perlu tahu kunci mana yang dipakai. `X-WA-Webhook-Id` mengisi
+kebutuhan itu; nilainya bukan rahasia (hanya penunjuk baris konfigurasi), dan
+pemalsuan tetap butuh secret.
+
+Verifikasi di sisi penerima:
+
+```js
+// Petakan id → secret yang diberikan saat webhook didaftarkan.
+const secrets = {
+  whk_a018444f: process.env.WA_SECRET_INBOX,
+  whk_4008f9d9: process.env.WA_SECRET_STATUS,
+};
+
+const secret = secrets[req.headers['x-wa-webhook-id']];
+if (!secret) return res.status(401).end();
+
+const expected = 'sha256=' + createHmac('sha256', secret)
+  .update(`${timestamp}.${body}`)
+  .digest('hex');
+if (!timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) {
+  return res.status(401).end();
+}
+```
+
+Bila aplikasi penerima hanya punya satu webhook, secret itu cukup disimpan di
+satu variabel lingkungan dan header `X-WA-Webhook-Id` boleh diabaikan.
+
+> **Dedupe pakai `X-WA-Idempotency-Key`, bukan `deliveryId`.** Satu event yang
+> cocok dengan beberapa webhook diantrekan sekali per webhook dengan `deliveryId`
+> yang sama, tetapi tanda tangannya berbeda. Untuk mengenali kiriman ganda dari
+> kejadian yang sama, pakai `X-WA-Idempotency-Key`; bila perlu memisahkan per
+> endpoint, gabungkan dengan `X-WA-Webhook-Id`.
+
+Percobaan ulang: 1m → 5m → 30m → 2h → 6h, maksimal 5 kali. HTTP 4xx (selain 408
+dan 429) dianggap permanen dan tidak diulang.
+
+**Masa simpan body.** Body pengiriman berisi isi pesan pelanggan, jadi setelah
+pengiriman selesai (sukses maupun gagal permanen) isinya dikosongkan setelah
+`WEBHOOK_PAYLOAD_RETENTION_HOURS` jam (default 24). Barisnya tetap ada sebagai
+jejak audit — yang hilang hanya body-nya. Baris `pending` tidak pernah
+dikosongkan karena body-nya masih dibutuhkan worker.
+
+Konsekuensinya: pengiriman yang gagal lebih lama dari jendela itu **tidak bisa
+diulang** lewat `POST /webhooks/deliveries/:id/retry` — endpoint membalas `409`,
+bukan `404`, karena barisnya ada tetapi body-nya sudah tidak disimpan. Perpanjang
+nilainya bila riwayat perlu bisa diulang lebih lama; `0` mematikan pembersihan
+sehingga body bertahan sampai barisnya dipangkas (30 hari).
+
+**Secret.** Nilainya hanya dikembalikan sekali, saat webhook dibuat. Pembacaan
+berikutnya menampilkan bentuk tersamarkan (`whse••••ef53`). Bila salinan itu
+hilang, jangan hapus lalu daftar ulang — riwayat pengiriman ikut terhapus.
+Pakai `POST /api/v1/webhooks/:id/rotate-secret`, yang menerbitkan secret baru
+dan mengembalikannya sekali. Setelah rotasi, penerima akan menolak kiriman
+sampai nilai barunya dipasang di sana.
+
+### Chatbot
+Aturan disimpan di `chatbot_flows`, posisi percakapan di `chatbot_sessions`.
+Tipe pencocokan: `exact`, `contains`, `keyword` (kata utuh, dipisah koma), dan
+`regex`. Aturan dengan `steps` menjalankan alur bertingkat.
+
+Perilaku yang perlu diketahui:
+
+- **Hanya chat pribadi.** Grup dilewati.
+- **Opt-out dihormati lebih dulu.** `STOP`, `BERHENTI`, `UNSUB` mencatat kontak
+  ke `chatbot_optouts`; bot diam dan nomornya sebaiknya dikeluarkan dari blast.
+- **Human takeover.** Begitu operator membalas manual (tanpa `batchId`), bot
+  berhenti untuk kontak itu selama 24 jam.
+- **Balasan lewat antrean prioritas**, sehingga tetap tercatat di `messages` dan
+  tetap kena pacing anti-ban.
+- **Sinyal "sedang mengetik" dikirim sebelum balasan.** Durasinya mengikuti
+  panjang balasan dan dibatasi 8 detik — cukup untuk terasa manusiawi, tidak
+  sampai membuat penerima mengira bot macet. Jalur blast juga sudah memakai
+  mekanisme yang sama, jadi tidak ada dua perilaku berbeda.
+- **Pengirim berbentuk `@lid`** diselesaikan ke nomor aslinya lewat
+  `lid_mappings`. Bila pemetaannya belum diketahui, bot diam.
+
+Uji aturan tanpa mengirim apa pun:
+
+```bash
+curl -s -X POST https://wa-api.domain.com/api/v1/chatbot/test \
+  -H "X-API-Key: wa_live_xxx" -H "Content-Type: application/json" \
+  -d '{"sessionId":"sess-abc","text":"halo"}'
+```
+
+---
+
+## 7. Anti-Ban Engine & Telemetry
 Gateway ini dilengkapi modul mitigasi pemblokiran 8 layer:
 1. **Adaptive Jitter Delay:** Delay pengiriman acak antar pesan (3.000ms – 12.000ms).
 2. **Timelock Protection (463):** Pacing throttling jika rasio pesan keluar melonjak tajam.
@@ -328,6 +522,6 @@ Gateway ini dilengkapi modul mitigasi pemblokiran 8 layer:
 
 ---
 
-## 7. License
+## 8. License
 
 Distributed under the MIT License. See `LICENSE` for more information.
