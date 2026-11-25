@@ -390,14 +390,21 @@ export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({ sessions
                 {messages.map((m) => {
                   const hasBatch = Boolean(m.batchId);
                   const sessObj = sessions.find((s) => s.id === m.sessionId);
-                  const timeStr = m.timestamp
-                    ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                  const d = m.timestamp ? new Date(m.timestamp) : null;
+                  const dateStr = d
+                    ? d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
                     : '-';
+                  const clockStr = d
+                    ? d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                    : '';
 
                   return (
                     <tr key={m.id || `${m.to}_${m.timestamp}`} className="hover:bg-surface-alt/40 transition-colors">
                       <td className="px-3.5 py-2.5 text-ink-muted font-mono text-[11px] whitespace-nowrap">
-                        {timeStr}
+                        <div className="flex flex-col leading-tight">
+                          <span>{dateStr}</span>
+                          <span className="text-[10px] text-ink-faint">{clockStr}</span>
+                        </div>
                       </td>
                       <td className="px-3.5 py-2.5">
                         <div className="font-semibold text-ink text-[11px]">

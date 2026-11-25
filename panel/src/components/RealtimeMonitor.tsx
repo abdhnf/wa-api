@@ -309,7 +309,14 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
  status: m.status || 'pending',
  jitterDelayMs: m.jitterDelayMs || 0,
  remainingDelayMs: 0,
- timestamp: m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+ // Tanggal di baris atas, jam di bawah (dipisah \n lalu dipecah saat render)
+ // supaya kolom "Masuk Antrean" tetap sempit walau memuat tahun.
+ timestamp: m.timestamp
+    ? (() => {
+        const d = new Date(m.timestamp);
+        return `${d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}\n${d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}`;
+      })()
+    : '',
  isBulk: !!m.batchId,
  statusTimes: m.statusTimes,
 })));
@@ -1183,7 +1190,14 @@ export const RealtimeMonitor: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = fal
        const isRetrying = retryingIds.has(item.id);
        return (
          <tr key={item.id} className="hover:bg-surface-alt/40 transition">
-           <td className="px-4 py-3 text-ink-muted whitespace-nowrap">{item.timestamp}</td>
+           <td className="px-4 py-3 text-ink-muted whitespace-nowrap">
+             {item.timestamp ? (
+               <div className="flex flex-col leading-tight">
+                 <span>{item.timestamp.split('\n')[0]}</span>
+                 <span className="text-[10px] text-ink-faint font-mono">{item.timestamp.split('\n')[1]}</span>
+               </div>
+             ) : '-'}
+           </td>
            <td className="px-4 py-3 font-mono text-ink whitespace-nowrap">+{item.recipient}</td>
            <td className="px-4 py-3">
              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface-sunken border border-line text-[10px] text-ink-soft uppercase">
